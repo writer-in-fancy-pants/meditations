@@ -198,8 +198,12 @@ class PPGProcessor:
         demeaned = raw - dc
 
         # 2. Bandpass (online single-sample sosfilt)
-        zi_base = sosfilt_zi(self._sos)
-        filtered, self._zi = sosfilt(self._sos, [[demeaned]], zi=zi_base[:, np.newaxis, :])#, np.newaxis])
+        try:
+            filtered, self._zi = sosfilt(self._sos, [[demeaned]], zi=self._zi[:, np.newaxis, :])#, np.newaxis])
+        except:
+            zi_base = sosfilt_zi(self._sos)
+            filtered, self._zi = sosfilt(self._sos, [[demeaned]], zi=zi_base[:, np.newaxis, :])#, np.newaxis])
+
         filtered = float(filtered[0, 0])
 
         # 3. Gain normalisation (divide by rolling RMS)
