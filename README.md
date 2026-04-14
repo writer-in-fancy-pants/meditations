@@ -108,6 +108,8 @@ Each device subdirectory can be deployed independently or as git submodules
 of the landing page repo (see `muse-tools/` README).
 
 ## TODO
+* Fix heart rate calculation in ppg bridge, use ACC?
+* Combine the bridge to provide both heart rate and EEG input at the same time
 * Add a feedback speed control dial with presets in seconds, % of windows [(60, 0.6), (10,0.75), (5, 0.9), (2,0.99)]
 * Instructions at the bottom - start with loud setting, the music goes down with feedback
 * Variations of the project - standalone without monitoring
