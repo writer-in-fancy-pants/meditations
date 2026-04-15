@@ -44,6 +44,9 @@ document.querySelectorAll('.mode-tab').forEach(tab => {
 /* ── Status indicator ───────────────────────────────────── */
 
 function _applyStatus(s) {
+  // Broadcast to any mounted mode that wants to react to WS state changes
+  window.dispatchEvent(new CustomEvent('ws-status', { detail: s }));
+
   const dot = document.getElementById('wsDot');
   const lbl = document.getElementById('wsLabel');
   const btn = document.getElementById('connectBtn');
@@ -56,16 +59,58 @@ function _applyStatus(s) {
       lbl.textContent = 'Connected';
       btn.textContent = 'Disconnect';
       document.getElementById('connectBanner').style.display = 'none';
+      _hideMixedContentWarning();
       break;
     case 'connecting':
       dot.classList.add('connecting');
       lbl.textContent = 'Connecting…';
       btn.textContent = 'Cancel';
       break;
+    case 'mixed-content':
+      lbl.textContent = 'Blocked';
+      btn.textContent = 'Connect';
+      _showMixedContentWarning();
+      break;
     default:
       lbl.textContent = 'Disconnected';
       btn.textContent = 'Connect';
   }
+}
+
+
+/* ── Mixed-content warning banner ──────────────────────────── */
+
+const _MC_ID = 'mixedContentWarning';
+
+function _showMixedContentWarning() {
+  if (document.getElementById(_MC_ID)) return;
+  const div = document.createElement('div');
+  div.id = _MC_ID;
+  div.className = 'mixed-content-warning';
+  div.innerHTML = `
+    <strong>Connection blocked by browser security policy.</strong>
+    This page is served over <code>https://</code> but the bridge URL uses
+    <code>ws://</code>. Non-localhost addresses require a TLS-terminating proxy
+    so the browser can upgrade to <code>wss://</code>. Options:
+    <ul>
+      <li>Use <strong>ngrok</strong>: <code>ngrok http 8765</code> → paste the
+          <code>wss://…ngrok.io</code> URL into the connect box above.</li>
+      <li>Use <strong>Caddy</strong> locally:
+          <code>caddy reverse-proxy --from localhost:8766 --to localhost:8765</code>
+          → connect to <code>wss://localhost:8766</code>.</li>
+      <li>If the bridge is on the same machine as your browser,
+          use <code>ws://localhost:8765</code> — localhost is exempt
+          from this restriction on Chrome 94+ and Firefox 95+.</li>
+    </ul>
+    <button class="mixed-content-close" onclick="document.getElementById('${_MC_ID}')?.remove()">Dismiss</button>
+  `;
+  // Insert below the connect banner
+  const banner = document.getElementById('connectBanner');
+  banner?.parentNode?.insertBefore(div, banner.nextSibling);
+}
+
+function _hideMixedContentWarning() {
+  document.getElementById(_MC_ID)?.remove();
 }
 
 WsClient.setOnStatus(_applyStatus);

@@ -66,7 +66,7 @@
       <p class="banner-title">Connect to muselsl bridge</p>
       <p class="banner-sub">
         Run <code>python bridge.py</code>, then enter the WebSocket address.
-        For HRV without Muse, run <code>python whoop_simulator.py --scenario meditation --loop</code>.
+        For HRV without Muse, run <code>python hr_rr_simulator.py --scenario meditation --loop</code>.
       </p>
       <div class="banner-row">
         <input type="text" id="wsUrlInput" value="ws://localhost:8765" class="ws-input" />
@@ -82,11 +82,13 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="lib/chartUtils.js"></script>
-<script src="lib/audio.js"></script>
-<script src="lib/wsClient.js"></script>
-<script src="lib/theme.js"></script>
-<script src="lib/audioPanel.js"></script>
+<script src="../lib/chartUtils.js"></script>
+<script src="../lib/audio.js"></script>
+<script src="../lib/wsClient.js"></script>
+<script src="../lib/theme.js"></script>
+<script src="../lib/hrv.js"></script>
+<script src="../lib/audioPanel.js"></script>
+<script src="../lib/youtubeAudio.js"></script>
 <script src="modes/at.js"></script>
 <script src="modes/hrv.js"></script>
 <script src="modes/howto.js"></script>

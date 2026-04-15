@@ -142,7 +142,7 @@ const HowTo = (() => {
     </div>
     <p style="margin-top:1rem;font-size:12px;color:var(--text-tertiary)">
       Testing without hardware?
-      Run <code>python whoop_simulator.py --scenario meditation --loop</code> to generate realistic HRV data,
+      Run <code>python hr_rr_simulator.py --scenario meditation --loop</code> to generate realistic HRV data,
       or use the muselsl simulator for EEG. Connect on the same port.
     </p>
   </section>

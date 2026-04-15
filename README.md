@@ -39,7 +39,7 @@ meditation/
 │   ├── app.js              ← Orchestrator with BLE + WebSocket dual connection
 │   ├── style.css
 │   ├── bridge.py           ← WHOOP BLE → WebSocket (bleak)
-│   ├── whoop_simulator.py  ← Physiological data simulator (no hardware needed)
+│   ├── hr_rr_simulator.py  ← Physiological data simulator (no hardware needed)
 │   └── modes/
 │       ├── hrv.js          ← HRV training with session duration + end alarm
 │       └── howto.js        ← WHOOP-specific training guide
@@ -92,7 +92,7 @@ pip install bleak websockets
 # Enable HR Broadcast in the WHOOP app
 python whoop/bridge.py          # BLE bridge  (ws://localhost:8765)
 # Or: direct Web Bluetooth in Chrome/Edge — no Python needed
-# Or: python whoop/whoop_simulator.py --scenario meditation --loop
+# Or: python whoop/hr_rr_simulator.py --scenario meditation --loop
 ```
 
 ## Deployment

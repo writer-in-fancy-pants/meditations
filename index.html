@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>meditation · neurofeedback tools</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <canvas id="bgCanvas" aria-hidden="true"></canvas>
+
+  <!-- ── Topbar ─────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-brand">
+      <svg class="brand-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+      </svg>
+      <span class="brand-name">meditation</span>
+    </div>
+    <div class="topbar-right">
+      <nav class="topbar-links">
+        <a href="https://github.com/alexandrebarachant/muse-lsl" target="_blank" rel="noopener" class="nav-link">muselsl</a>
+        <a href="https://choosemuse.com/pages/developers" target="_blank" rel="noopener" class="nav-link">Muse SDK</a>
+        <a href="https://github.com/writer-in-fancy-pants/meditations/blob/main/README.md" class="nav-link" id="readmeLink">README</a>
+      </nav>
+      <button class="theme-btn" id="themeBtn" aria-label="Toggle theme">
+        <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"/>
+          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Hero ───────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-inner">
+      <p class="hero-eyebrow">open · browser-based · multi-device</p>
+      <h1 class="hero-title">neurofeedback<br/>training tools</h1>
+      <p class="hero-desc" id="heroDesc">
+        Meditation tool for live Neurofeedback and Biofeedback.
+      </p>
+      <div class="hero-chips" id="heroChips">
+        <span class="chip">EEG · α/θ</span>
+        <span class="chip">HRV · RMSSD</span>
+        <span class="chip">PPG · coherence</span>
+        <span class="chip">Web Bluetooth</span>
+        <span class="chip">muselsl</span>
+      </div>
+    </div>
+    <div class="hero-vis" aria-hidden="true" id="heroVis">
+      <div class="band-bar" style="--bh:38%;--bc:#6b7db3;--bd:0s"></div>
+      <div class="band-bar" style="--bh:62%;--bc:#7c75e0;--bd:.15s"></div>
+      <div class="band-bar" style="--bh:85%;--bc:#2db891;--bd:.3s"></div>
+      <div class="band-bar" style="--bh:55%;--bc:#e07050;--bd:.45s"></div>
+      <div class="band-bar" style="--bh:28%;--bc:#e0b020;--bd:.6s"></div>
+      <div class="band-labels"><span>δ</span><span>θ</span><span>α</span><span>β</span><span>γ</span></div>
+    </div>
+  </section>
+
+  <!-- ── Readme modal ───────────────────────────────── -->
+  <div class="readme-backdrop" id="readmeBackdrop" style="display:none" aria-modal="true" role="dialog">
+    <div class="readme-modal">
+      <div class="readme-toolbar">
+        <span class="readme-title">README.md</span>
+        <button class="readme-close" id="readmeClose" aria-label="Close">×</button>
+      </div>
+      <div class="readme-body" id="readmeBody">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── Device grid ────────────────────────────────── -->
+  <main class="devices-section">
+    <div class="devices-grid">
+
+      <!-- Muse 2 -->
+      <a class="device-card" href="muse2/index.html" aria-label="Muse 2 neurofeedback">
+        <div class="card-accent" style="--ca:#7c75e0"></div>
+        <div class="card-header">
+          <div class="card-icon" style="--ic:#7c75e0;--ib:rgba(124,117,224,0.12)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </div>
+          <div class="card-tags">
+            <span class="card-tag">EEG · PPG</span>
+            <span class="card-tag card-tag-live">muselsl</span>
+          </div>
+        </div>
+        <h2 class="card-title">Muse 2</h2>
+        <p class="card-desc">
+          Alpha/theta Peniston protocol training and HRV coherence biofeedback
+          via Muse 2's EEG and PPG sensors. Requires the muselsl bridge.
+        </p>
+        <ul class="card-features">
+          <li>α/θ crossover training with adaptive Peniston threshold</li>
+          <li>PPG-derived HRV via Welch peak detection at 64 Hz</li>
+          <li>Live band-power chart across all 4 EEG channels</li>
+          <li>Generative ambient audio + closed-eyes tone feedback</li>
+        </ul>
+        <div class="card-footer">
+          <span class="card-cta">Open tool →</span>
+          <span class="card-stack">Python bridge · HTML · JS</span>
+        </div>
+      </a>
+
+      <!-- WHOOP -->
+      <a class="device-card" href="whoop/index.html" aria-label="WHOOP HRV training">
+        <div class="card-accent" style="--ca:#2db891"></div>
+        <div class="card-header">
+          <div class="card-icon" style="--ic:#2db891;--ib:rgba(45,184,145,0.12)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </div>
+          <div class="card-tags">
+            <span class="card-tag">HRV · BLE</span>
+            <span class="card-tag card-tag-ble">Bluetooth</span>
+          </div>
+        </div>
+        <h2 class="card-title">WHOOP</h2>
+        <p class="card-desc">
+          Resonant-frequency HRV biofeedback from WHOOP's BLE heart rate broadcast.
+          Connects directly in Chrome/Edge — no Python required — or via bridge.
+        </p>
+        <ul class="card-features">
+          <li>Direct Web Bluetooth — no Python, no bridge in Chrome/Edge</li>
+          <li>Rolling RMSSD, pNN50, and coherence index gauge</li>
+          <li>Adaptive volume + pitch-coded tones for closed-eyes use</li>
+          <li>Session duration, end alarm, and session summary</li>
+        </ul>
+        <div class="card-footer">
+          <span class="card-cta">Open tool →</span>
+          <span class="card-stack">BLE · Python bridge · HTML · JS</span>
+        </div>
+      </a>
+
+      <!-- New device placeholder -->
+      <div class="device-card device-card-soon">
+        <div class="card-accent" style="--ca:#555d78"></div>
+        <div class="card-header">
+          <div class="card-icon" style="--ic:#555d78;--ib:rgba(85,93,120,0.10)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </div>
+          <div class="card-tags">
+            <span class="card-tag">add device</span>
+          </div>
+        </div>
+        <h2 class="card-title">Add a device</h2>
+        <p class="card-desc">
+          Copy <code>device/</code>, implement <code>device_reader()</code>
+          in <code>bridge.py</code>, fill in the mode template, and add a card here.
+        </p>
+        <ul class="card-features">
+          <li>Shared lib/ covers HRV, audio, BLE, charts, theme</li>
+          <li>Only <code>bridge.py</code> and the mode template need writing</li>
+          <li>Add as git submodule to keep repos independent</li>
+        </ul>
+        <div class="card-footer">
+          <span class="card-cta" style="color:var(--text-tertiary)">See device/ boilerplate</span>
+          <span class="card-stack">copy · implement · deploy</span>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <span class="brand-name footer-brand">meditation</span>
+      <span class="footer-sep">·</span>
+      <span class="footer-note">MIT · open source</span>
+      <div class="footer-links">
+        <a href="https://github.com/alexandrebarachant/muse-lsl" target="_blank" rel="noopener">muselsl</a>
+        <a href="https://choosemuse.com" target="_blank" rel="noopener">InteraXon</a>
+        <a href="README.md" id="readmeFooterLink">README</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- marked.js for Markdown rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

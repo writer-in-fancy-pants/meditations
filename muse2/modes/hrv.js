@@ -136,7 +136,7 @@ const HRV = (() => {
       newRR = _detectPeaks(frame.ppg_bvp);
       if (newRR.length) bpm = Math.round(60000 / (newRR.reduce((a,b)=>a+b,0)/newRR.length));
     } else if ((frame.type === 'rr' || frame.bpm !== undefined) && Array.isArray(frame.rr_ms)) {
-      // WHOOP-compatible frame (from bridge.py / whoop_simulator.py)
+      // WHOOP-compatible frame (from bridge.py / hr_rr_simulator.py)
       newRR = frame.rr_ms;
       bpm   = frame.bpm;
     }
@@ -335,7 +335,7 @@ const HRV = (() => {
   </div>
   <p class="ctrl-desc" style="margin-bottom:.5rem">
     Uses Muse 2 PPG (BVP channel) at 64 Hz. Also accepts WHOOP-compatible
-    <code>{ type:"rr", bpm, rr_ms }</code> frames from bridge.py or whoop_simulator.py.
+    <code>{ type:"rr", bpm, rr_ms }</code> frames from bridge.py or hr_rr_simulator.py.
   </p>
   <div class="stat-row">
     <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="hrvStatStatus">Idle</span></div>

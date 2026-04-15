@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-whoop_simulator.py  —  WHOOP 4.0/5.0 physiological data simulator
+hr_rr_simulator.py  —  WHOOP 4.0/5.0 physiological data simulator
 Generates realistic HR + RR interval data and broadcasts it over WebSocket
 in the same JSON format as bridge.py:  { "bpm": int, "rr_ms": [int, ...] }
+
+Can also be used to test HRV training for other devices
 
 WHOOP 4.0 specs modelled:
   • PPG sampled at 52 Hz internally; RR intervals derived from peak detection
@@ -14,15 +16,15 @@ WHOOP 4.0 specs modelled:
   • RMSSD at rest: 25–65 ms (individual variation; default 40 ms)
 
 Usage:
-    python whoop_simulator.py                      # resting session, wrist
-    python whoop_simulator.py --scenario training  # workout ramp
-    python whoop_simulator.py --scenario meditation
-    python whoop_simulator.py --scenario sleep
-    python whoop_simulator.py --scenario recovery
-    python whoop_simulator.py --placement biceps   # lower noise
-    python whoop_simulator.py --rmssd 55           # high HRV individual
-    python whoop_simulator.py --hr-base 68 --port 9000
-    python whoop_simulator.py --list-scenarios
+    python hr_rr_simulator.py                      # resting session, wrist
+    python hr_rr_simulator.py --scenario training  # workout ramp
+    python hr_rr_simulator.py --scenario meditation
+    python hr_rr_simulator.py --scenario sleep
+    python hr_rr_simulator.py --scenario recovery
+    python hr_rr_simulator.py --placement biceps   # lower noise
+    python hr_rr_simulator.py --rmssd 55           # high HRV individual
+    python hr_rr_simulator.py --hr-base 68 --port 9000
+    python hr_rr_simulator.py --list-scenarios
 
 Install:  pip install websockets
 """

@@ -42,7 +42,7 @@ const HowTo = (() => {
       </ol>
       <h3 class="howto-h3">Testing without hardware</h3>
       <p>Run the physiological simulator to generate realistic HRV data on any scenario:</p>
-      <p><code>python whoop_simulator.py --scenario meditation --loop</code></p>
+      <p><code>python hr_rr_simulator.py --scenario meditation --loop</code></p>
       <div class="howto-note">
         WHOOP sends RR intervals in milliseconds directly over BLE GATT (0x2A37), unlike
         Polar devices which use 1/1024 s units. The BLE client handles this automatically.
