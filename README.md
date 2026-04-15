@@ -22,6 +22,7 @@ meditation/
 │   ├── hrv.js              ← HRV math (RMSSD, pNN50, coherence), charts, gauge
 │   ├── theme.js            ← Dark/light theme toggle
 │   └── wsClient.js         ← WebSocket singleton (connect, setOnFrame, setOnStatus)
+│   └── youtubeAudio.js     ← Youtube audio integration for meditation tracks via url
 │
 ├── muse2/                  ← Muse 2 EEG + PPG neurofeedback
 │   ├── index.html
