@@ -128,7 +128,7 @@ const AT = (() => {
         <span class="fb-chk-sub">Music softens when θ/α exceeds threshold, deepening inward focus</span>
       </div>
     </label>
-    <label class="fb-chk"><input type="checkbox" id="fbBeep" checked />
+    <label class="fb-chk"><input type="checkbox" id="fbBeep" />
       <div class="fb-chk-body">
         <span class="fb-chk-title">Periodic tone</span>
         <span class="fb-chk-sub">660 Hz when θ > α · 330 Hz when α > θ</span>
