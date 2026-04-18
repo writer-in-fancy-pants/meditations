@@ -34,10 +34,12 @@ const HRV = (() => {
 
   /* ── State ──────────────────────────────────────────────────────── */
   let sessionActive  = false;
+  let sessionPaused = false;
   let baselinePhase  = false;
-  let rrBuffer       = [];             // all RR intervals this session (ms)
-  let ppgBuffer      = [];             // raw BVP ring buffer for peak detection
-  let lastPeakIdx    = -1;             // sample index of last detected peak
+  const ppg_keys     = ['rr_ms', 'rmssd_ms']
+    //'sdnn_ms','pnn50', 'mean_hr_bpm', 'lf_power', 'hf_power', 'lf_hf_ratio', 'peak_count'];       
+  let ppg_frames     = {};            // all RR intervals this session (ms)
+  let lastPeakIdx    = -1;            // sample index of last detected peak
   let sampleCount    = 0;             // total samples received
   let baselineRMSSD  = null;
   let elapsedSec     = 0;
@@ -47,85 +49,56 @@ const HRV = (() => {
 
   const hist  = HrvLib.makeHist();
   const charts = {};
-  /* ── PPG peak detector ─────────────────────────────────────────── */
-  // Simple derivative-zero-crossing peak detector on the BVP signal.
-  // Muse 2 BVP is the derivative of the PPG, so peaks in BVP ~= R-peaks.
 
-  function _detectPeaks(newSamples) {
-    const detected = [];
-    for (const s of newSamples) {
-      ppgBuffer.push(s);
-      sampleCount++;
-    }
-    // Keep buffer manageable (10 s window)
-    const maxBuf = PPG_FS * 10;
-    if (ppgBuffer.length > maxBuf) {
-      const trimBy = ppgBuffer.length - maxBuf;
-      ppgBuffer.splice(0, trimBy);
-      if (lastPeakIdx >= 0) lastPeakIdx -= trimBy;
-    }
+ /* ── Helpers ────────────────────────────────────────────────────── */
+  function _el(id) { return document.getElementById(id); }
 
-    const N = ppgBuffer.length;
-    // Look for peaks starting after the last detected one + min distance
-    const startIdx = lastPeakIdx < 0 ? 1 : lastPeakIdx + PEAK_MIN_DIST_SAMPLES;
-    for (let i = Math.max(1, startIdx); i < N-1; i++) {
-      const prev = ppgBuffer[i-1], curr = ppgBuffer[i], next = ppgBuffer[i+1];
-      if (curr > prev && curr >= next) {
-        // Amplitude threshold: must exceed 0.3 × recent range
-        const recent = ppgBuffer.slice(Math.max(0, i-PPG_FS*2), i+1);
-        const mn = Math.min(...recent), mx = Math.max(...recent);
-        const range = mx - mn;
-        if (range > 0 && (curr - mn) > 0.3 * range) {
-          if (lastPeakIdx >= 0) {
-            const rrMs = ((i - lastPeakIdx) / PPG_FS) * 1000;
-            if (rrMs >= 300 && rrMs <= 2000) detected.push(Math.round(rrMs));
-          }
-          lastPeakIdx = i;
-        }
-      }
-    }
-    return detected;
+  /* ── Disconnection toast ────────────────────────────────────────── */
+
+  function _showToast() {
+    const toast = _el('Toast');
+    if (!toast) return;
+    toast.style.display = 'flex';
+    clearTimeout(_toastTimer);
+    // Auto-dismiss after 8 s
+    _toastTimer = setTimeout(_hideToast, 8000);
+  }
+
+  function _hideToast() {
+    const toast = _el('Toast');
+    if (toast) toast.style.display = 'none';
   }
 
   /* ── Frame handler ──────────────────────────────────────────────── */
 
   function _onFrame(frame) {
-    if (!_mounted) return;
+    if (!_mounted || ( frame.type !== 'ppg' && frame.type !== 'rr')) return;
+      // Got a frame → hide any disconnection toast
+      _hideToast();
+    // If paused, accept frames (keeps bridge alive) but skip chart/training
+    if (sessionPaused) return;
+    const metrics = frame.metrics;
+    if (metrics == null) return;
 
-    let bpm = null, newRR = [];
-
-    if (frame.type === 'ppg' && Array.isArray(frame.ppg_bvp)) {
-      newRR = _detectPeaks(frame.ppg_bvp);
-      if (newRR.length) bpm = Math.round(60000 / (newRR.reduce((a,b)=>a+b,0)/newRR.length));
-    } else if ((frame.type === 'rr' || frame.bpm !== undefined) && Array.isArray(frame.rr_ms)) {
-      // WHOOP-compatible frame (from bridge.py / hr_rr_simulator.py)
-      newRR = frame.rr_ms;
-      bpm   = frame.bpm;
-    }
-
-    if (!newRR.length) return;
-
-    rrBuffer.push(...newRR);
+    ppg_keys.forEach( key => {
+      ppg_frames[key].push(metrics[key]);
+    });
 
     // Baseline collection
     if (baselinePhase) {
-      const pct = Math.min(rrBuffer.length / BASELINE_BEATS, 1);
+      const pct = Math.min(ppg_frames['rr_ms'].length / BASELINE_BEATS, 1);
       _el('statStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
-      if (rrBuffer.length >= BASELINE_BEATS) _finishBaseline();
+      if (ppg_frames['rr_ms'].length >= BASELINE_BEATS) _finishBaseline();
       return;
     }
 
-    const window = rrBuffer.slice(-HrvLib.RR_WINDOW);
-    const rv = HrvLib.rmssd(window);
-    const pv = HrvLib.pnn50(window);
-    const ci = HrvLib.coherenceIndex(rrBuffer);
-    const hr     = bpm ?? (rv ? Math.round(60000/(rrBuffer.slice(-1)[0]||800)) : null);
+    const rv = metrics['rmssd_ms'];
+    const pv = metrics['pnn50'];
+    const ci = HrvLib.coherenceIndex(ppg_frames['rr_ms']);
+    const hr     = metrics['mean_hr_bpm'];
     const label  = sessionActive && hist.t0 ? String(Math.floor((Date.now()-hist.t0)/1000)) : '';
 
-    //_updateCharts(rv);
-    //_drawGauge(ci, rv);
-
-    HrvLib.pushHist(hist, { label, hr: bpm, rr: rrIntervals[0]??null, rv }, MAX_CHART_PTS);
+    HrvLib.pushHist(hist, { label, hr: hr, rr: metrics['rr_ms']??null, rv }, MAX_CHART_PTS);
     HrvLib.updateCharts(charts, hist, baselineRMSSD);
     HrvLib.drawGauge('muse2Gauge', ci, rv, baselineRMSSD);
     HrvLib.updateStateBadge('muse2StateBadge', rv, baselineRMSSD);
@@ -148,14 +121,17 @@ const HRV = (() => {
     }
   }
 
+  function reset_ppg(){
+    ppg_keys.forEach(key=>{ppg_frames[key] = [];});
+  }
+
   function _finishBaseline() {
     baselinePhase = false;
-    const rv = HrvLib.rmssd(rrBuffer);
-    baselineRMSSD = rv;
-    _el('statBaseline').textContent = rv ? rv.toFixed(1)+' ms' : '—';
+    baselineRMSSD = ppg_frames['rmssd_ms'].at(-1);
+    _el('statBaseline').textContent = baselineRMSSD ? baselineRMSSD.toFixed(1)+' ms' : '—';
     _el('statStatus').textContent   = 'Baseline done';
     _el('startBtn').disabled        = false;
-    rrBuffer = [];
+    //reset_ppg();
   }
   
   /* ── Session control ────────────────────────────────────────────── */
@@ -170,7 +146,7 @@ const HRV = (() => {
     const beepSec = +(_el('beepInterval')?.value||30);
     if (_el('fbBeep')?.checked) {
       Audio.scheduleBeep(beepSec,
-        () => ({ score: HrvLib.rmssd(rrBuffer.slice(-RR_WINDOW))??0, threshold: baselineRMSSD??1 }),
+        () => ({ score: ppg_frames['rmssd_ms'].at(-1)??0, threshold: baselineRMSSD??1 }),
         () => sessionActive);
     }
     timerInterval = setInterval(()=>{
@@ -362,6 +338,7 @@ const HRV = (() => {
   function mount() {
     if (_mounted) return;
     _mounted = true;
+    reset_ppg();
 
     document.getElementById('modePanel').innerHTML = TEMPLATE;
     Object.assign(charts, HrvLib.initCharts({
@@ -374,7 +351,7 @@ const HRV = (() => {
 
     _el('BaselineBtn').addEventListener('click', () => {
       if (!WsClient.isConnected()) { alert('Connect to the bridge first.'); return; }
-      baselinePhase=true; rrBuffer=[];
+      baselinePhase=true;
       _el('startBtn').disabled=true;
       _el('statStatus').textContent='Calibrating…';
     });
@@ -400,7 +377,7 @@ const HRV = (() => {
     ChartUtils.destroyAll(charts);
     document.getElementById('modePanel').innerHTML='';
     WsClient.setOnFrame(null);
-    rrBuffer=[]; ppgBuffer=[]; lastPeakIdx=-1; sampleCount=0;
+    reset_ppg(); lastPeakIdx=-1; sampleCount=0;
     hist.labels=[]; hist.hr=[]; hist.rr=[]; hist.rmssd=[]; hist.t0=null;
     baselineRMSSD=null;
   }
