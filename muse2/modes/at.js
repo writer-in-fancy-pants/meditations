@@ -3,30 +3,47 @@
  * Uses EEG band powers from the muselsl WebSocket bridge.
  * Depends on: Audio, AudioPanel, ChartUtils, WsClient (globals from lib/)
  *
+ * Features added vs original:
+ *   • Speed dial  — 4 preset adaptation rates (blockSecs × threshUpPct)
+ *   • Pause/resume — freezes chart updates and training logic, audio continues
+ *   • Graph reset  — clears both charts on every recalibrate click
+ *   • Gong fix     — long sustain (20 s decay, 25–30 s repeat interval)
+ *   • Disconnection toast — appears when WS drops during a session
+ *   • YouTube audio option — load a YT URL/ID as background music
+ *
  * Public API (called by app.js):
- *   AT.mount()    — render UI into #modePanel, wire up events, init charts
- *   AT.unmount()  — destroy charts, stop session, remove listeners
+ *   AT.mount()   — render UI into #modePanel, wire up events, init charts
+ *   AT.unmount() — destroy charts, stop session, remove listeners
  */
-
+ 
 'use strict';
 
 const AT = (() => {
 
   /* ── Constants ──────────────────────────────────────────────────── */
-  const HISTORY_SECONDS = 120;
-  const PUSH_HZ         = 4;
-  const MAX_POINTS      = HISTORY_SECONDS * PUSH_HZ;
-  const BASELINE_SECS   = 60;
-  const BLOCK_SECS      = 60;
-  const THRESH_UP_PCT   = 0.60;
-  const THRESH_DOWN_PCT = 0.40;
-  const THRESH_STEP     = 0.05;
+  const HISTORY_SECONDS  = 120;
+  const PUSH_HZ          = 4;
+  const MAX_POINTS       = HISTORY_SECONDS * PUSH_HZ;
+  const BASELINE_SECS    = 30;
+  const THRESH_DOWN_PCT  = 0.40;
+  const THRESH_STEP      = 0.05;
 
+  // Speed presets: [ label, blockSecs, threshUpPct ]
+  const SPEED_PRESETS = [
+    { label: 'Relaxed',  blockSecs: 60, threshUpPct: 0.60 },
+    { label: 'Standard', blockSecs: 10, threshUpPct: 0.75 },
+    { label: 'Fast',     blockSecs:  5, threshUpPct: 0.90 },
+    { label: 'Reactive', blockSecs:  2, threshUpPct: 0.99 },
+  ];
   const BAND_COLORS = { delta:'#6b7db3', theta:'#7c75e0', alpha:'#2db891', beta:'#e07050', gamma:'#e0b020' };
   const AT_COLORS   = { alpha:'#2db891', theta:'#7c75e0', ratio:'#e07050', thresh:'rgba(255,140,60,0.55)' };
+  /* ── Mutable adaptation speed (driven by speed dial) ───────────── */
+  let blockSecs    = SPEED_PRESETS[0].blockSecs;
+  let threshUpPct  = SPEED_PRESETS[0].threshUpPct;
 
   /* ── State ──────────────────────────────────────────────────────── */
   let sessionActive  = false;
+  let sessionPaused  = false;
   let baselineActive = false;
   let baselineBuffer = [];
   let baseline       = { alpha:null, theta:null, atRatio:null };
@@ -37,6 +54,8 @@ const AT = (() => {
   let timerInterval  = null;
   let lastCrossover  = false;
   let _mounted       = false;
+  let _toastTimer    = null;  // disconnect toast timeout handle
+  let _ytLoaded      = false; // has a YouTube video been loaded?
 
   const hist = {
     labels:[], delta:[], theta:[], alpha:[], beta:[], gamma:[], atRatio:[],
@@ -47,12 +66,24 @@ const AT = (() => {
 
   /* ── HTML template ──────────────────────────────────────────────── */
   const TEMPLATE = `
+<!-- Disconnection toast -->
+<div class="at-toast" id="Toast" style="display:none">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+  EEG connection lost — data stream interrupted
+  <button class="at-toast-close" id="ToastClose">×</button>
+</div>
+
 <section class="section-card">
   <div class="section-hdr">
     <span class="section-title">α/θ Session</span>
     <div class="session-actions">
       <button class="btn-sm" id="BaselineBtn">Calibrate baseline (60 s)</button>
       <button class="btn-sm btn-accent" id="startBtn">Start training</button>
+      <button class="btn-sm" id="PauseBtn" disabled>Pause</button>
       <button class="btn-sm btn-danger" id="stopBtn" disabled>Stop</button>
     </div>
   </div>
@@ -107,11 +138,18 @@ const AT = (() => {
       <label class="sound-opt"><input type="radio" name="sound" value="gong" /> Tibetan gong</label>
       <label class="sound-opt"><input type="radio" name="sound" value="generative" /> Generative ambient <span class="badge-new">live</span></label>
       <label class="sound-opt"><input type="radio" name="sound" value="upload" /> Upload file</label>
-    </div>
+      <label class="sound-opt"><input type="radio" name="sound" value="youtube" /> YouTube link <span class="badge-new">yt</span></label>
+      </div>
     <div class="upload-row" id="uploadRow" style="display:none">
       <input type="file" id="audioUpload" accept=".wav,.mp3" style="display:none" />
       <button class="btn-sm" id="audioUploadBtn">Choose WAV / MP3…</button>
       <span class="upload-name" id="uploadName">No file</span>
+    </div>
+    <!-- youtube row -->
+    <div class="upload-row" id="ytRow" style="display:none">
+      <input type="text" class="ws-input" id="ytUrlInput" placeholder="YouTube URL or video ID" style="max-width:none;flex:1" />
+      <button class="btn-sm" id="ytLoadBtn">Load</button>
+      <span class="upload-name" id="ytStatus"></span>
     </div>
     <div class="volume-row">
       <label class="vol-lbl">Volume</label>
@@ -148,14 +186,24 @@ const AT = (() => {
   </section>
 
   <section class="ctrl-card">
-    <div class="ctrl-title">Threshold (Peniston adaptive)</div>
-    <p class="ctrl-desc">Auto-adjusts each 60 s block. Manual override below.</p>
+    <div class="ctrl-title">Adaptive threshold</div>
+    <p class="ctrl-desc">Auto-adjusts each block. Set adaptation speed below.</p>
     <label class="fb-chk"><input type="checkbox" id="autoThreshold" checked />
       <div class="fb-chk-body">
         <span class="fb-chk-title">Auto-adjust threshold</span>
         <span class="fb-chk-sub">Raises when above >60% of block, lowers when below 40% — Nan et al. 2014</span>
       </div>
     </label>
+
+    <!-- Speed dial -->
+    <div class="ctrl-label" style="margin-top:.75rem">Adaptation speed</div>
+    <div class="speed-dial" id="speedDial">
+      ${SPEED_PRESETS.map((p,i) =>
+        `<button class="speed-btn${i===0?' active':''}" data-idx="${i}">${p.label}</button>`
+      ).join('')}
+    </div>
+    <p class="speed-info" id="speedInfo">Block: ${SPEED_PRESETS[0].blockSecs}s · Up ≥${Math.round(SPEED_PRESETS[0].threshUpPct*100)}%</p>
+
     <div class="fb-sub-row">
       <label class="vol-lbl">θ/α threshold</label>
       <input type="range" id="manualThresh" min="0.2" max="3.0" step="0.05" value="1.0" />
@@ -164,8 +212,21 @@ const AT = (() => {
   </section>
 </div>`;
 
-  /* ── Chart init ─────────────────────────────────────────────────── */
+  /* ── Chart helpers ──────────────────────────────────────────────── */
 
+  function _resetChartData() {
+    const empty = () => Array(MAX_POINTS).fill(null);
+    if (charts.band) {
+      charts.band.data.labels = empty();
+      charts.band.data.datasets.forEach(d => { d.data = empty(); });
+      charts.band.update('none');
+    }
+    if (charts.at) {
+      charts.at.data.labels = empty();
+      charts.at.data.datasets.forEach(d => { d.data = empty(); });
+      charts.at.update('none');
+    }
+  }
   function _initCharts() {
     const cc    = ChartUtils.colors();
     const empty = () => Array(MAX_POINTS).fill(null);
@@ -215,11 +276,31 @@ const AT = (() => {
 
     ChartUtils.enableResetZoomShortcut(charts);
   }
+  /* ── Disconnection toast ────────────────────────────────────────── */
+
+  function _showToast() {
+    const toast = _el('Toast');
+    if (!toast) return;
+    toast.style.display = 'flex';
+    clearTimeout(_toastTimer);
+    // Auto-dismiss after 8 s
+    _toastTimer = setTimeout(_hideToast, 8000);
+  }
+
+  function _hideToast() {
+    const toast = _el('Toast');
+    if (toast) toast.style.display = 'none';
+  }
 
   /* ── Frame processing ───────────────────────────────────────────── */
 
   function _onFrame(frame) {
     if (!_mounted || frame.type !== 'eeg') return;
+    // Got a frame → hide any disconnection toast
+    _hideToast();
+
+    // If paused, accept frames (keeps bridge alive) but skip chart/training
+    if (sessionPaused) return;
 
     const { bands, metrics } = frame;
     const avg4 = band => ['tp9','af7','af8','tp10'].reduce((s,ch) => s+(bands[ch]?.[band]??0), 0)/4;
@@ -299,6 +380,14 @@ const AT = (() => {
     }
   }
 
+  /* ── Disconnection handler (called by app.js via WsClient.setOnStatus) ── */
+  // NOTE: modes cannot set their own onStatus because app.js owns that.
+  // Instead app.js must call AT.onDisconnect() when status becomes 'disconnected'.
+  // See mount() — we register a secondary status watcher on the shared WsClient.
+  function _onDisconnect() {
+    if (sessionActive) _showToast();
+  }
+
   function _finishBaseline() {
     baselineActive = false;
     const n = baselineBuffer.length;
@@ -317,20 +406,33 @@ const AT = (() => {
 
   function _startSession() {
     sessionActive = true;
+    sessionPaused  = false;
     hist.t0 = Date.now();
     elapsedSec = blockTimer = blockAbove = 0;
     _el('statStatus').textContent = 'Training';
     _el('startBtn').disabled      = true;
     _el('stopBtn').disabled       = false;
+    _el('PauseBtn').disabled      = false;
     _el('BaselineBtn').disabled   = true;
 
     AudioPanel.startSelectedSound();
+    // YouTube: play if already loaded
+    if (_el('sound-youtube')?.checked || _ytLoaded) {
+      const ytRadio = document.querySelector('input[name="sound"][value="youtube"]');
+      if (ytRadio?.checked && _ytLoaded) {
+        Audio.setMasterVolume(0, 0);  // silence Web Audio during YT play
+        if (typeof YtAudio !== 'undefined') {
+          YtAudio.play();
+          YtAudio.setVolume(AudioPanel.targetVolume);
+        }
+      }
+    }
 
     const beepSec = +(_el('beepInterval')?.value || 30);
     if (_el('fbBeep')?.checked) {
       Audio.scheduleBeep(beepSec,
         () => ({ score: hist.atRatio.slice(-1)[0] ?? 0, threshold }),
-        () => sessionActive
+        () => sessionActive && !sessionPaused
       );
     }
 
@@ -342,14 +444,41 @@ const AT = (() => {
     }, 1000);
   }
 
+  function _togglePause() {
+    if (!sessionActive) return;
+    sessionPaused = !sessionPaused;
+    const btn = _el('PauseBtn');
+    if (sessionPaused) {
+      btn.textContent = 'Resume';
+      btn.classList.add('btn-accent');
+      _el('statStatus').textContent = 'Paused';
+      Audio.stopSound();
+      if (typeof YtAudio !== 'undefined') YtAudio.pause();
+    } else {
+      btn.textContent = 'Pause';
+      btn.classList.remove('btn-accent');
+      _el('statStatus').textContent = 'Training';
+      AudioPanel.startSelectedSound();
+      if (typeof YtAudio !== 'undefined' && _ytLoaded) {
+        const ytRadio = document.querySelector('input[name="sound"][value="youtube"]');
+        if (ytRadio?.checked) YtAudio.play();
+      }
+    }
+  }
+
   function _stopSession() {
     sessionActive = false;
+    sessionPaused = false;
     clearInterval(timerInterval);
     Audio.cancelBeep();
     Audio.stopSound();
+    if (typeof YtAudio !== 'undefined') YtAudio.pause();
     _el('statStatus').textContent = 'Stopped';
     _el('startBtn').disabled      = false;
     _el('stopBtn').disabled       = true;
+    _el('PauseBtn').disabled      = true;
+    _el('PauseBtn').textContent   = 'Pause';
+    _el('PauseBtn').classList.remove('btn-accent');
     _el('BaselineBtn').disabled   = false;
   }
 
@@ -364,7 +493,7 @@ const AT = (() => {
 
     document.getElementById('modePanel').innerHTML = TEMPLATE;
     _initCharts();
-    AudioPanel.init(() => sessionActive);
+    AudioPanel.init(() => sessionActive && !sessionPaused);
     // Register this mode's frame handler with the shared WsClient singleton.
     // app.js owns the socket; we only swap the onFrame handler.
     WsClient.setOnFrame(_onFrame);
@@ -374,22 +503,92 @@ const AT = (() => {
       baselineActive = true; baselineBuffer = [];
       _el('startBtn').disabled = true;
       _el('statStatus').textContent = 'Calibrating…';
+    
+    // Reset both charts so user sees fresh data from this calibration
+      hist.labels=[]; hist.delta=[]; hist.theta=[]; hist.alpha=[];
+      hist.beta=[]; hist.gamma=[]; hist.atRatio=[]; hist.t0=null;
+      _resetChartData();
     });
+
+    // ── Session buttons ──────────────────────────────────────────
+    _el('PauseBtn').addEventListener('click', _togglePause);
     _el('startBtn').addEventListener('click', _startSession);
     _el('stopBtn').addEventListener('click',  _stopSession);
+    
+    // ── Toast close ──────────────────────────────────────────────
+    _el('ToastClose').addEventListener('click', _hideToast);
 
+    // ── Speed dial ───────────────────────────────────────────────
+    document.querySelectorAll('.speed-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = +btn.dataset.idx;
+        const p = SPEED_PRESETS[idx];
+        blockSecs   = p.blockSecs;
+        threshUpPct = p.threshUpPct;
+        document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        _el('speedInfo').textContent = `Block: ${p.blockSecs}s · Up ≥${Math.round(p.threshUpPct*100)}%`;
+        // Reset block counters so new speed takes effect immediately
+        blockTimer = 0; blockAbove = 0;
+      });
+    });
+
+    // ── Threshold slider ─────────────────────────────────────────
+    _el('manualThresh')?.addEventListener('input', e => {
+      threshold = +e.target.value;
+      _el('manualThreshVal').textContent = (+e.target.value).toFixed(2);
+    });    
     _el('beepInterval')?.addEventListener('input', e => {
       _el('beepIntervalVal').textContent = e.target.value + ' s';
       if (sessionActive && _el('fbBeep')?.checked) {
         Audio.scheduleBeep(+e.target.value,
           () => ({ score: hist.atRatio.slice(-1)[0]??0, threshold }),
-          () => sessionActive);
+          () => sessionActive && !sessionPaused);
       }
     });
+    // ── YouTube controls ─────────────────────────────────────────
+    // Show/hide yt row alongside upload row based on radio selection
+    document.querySelectorAll('input[name="sound"]').forEach(r => {
+      r.addEventListener('change', () => {
+        _el('uploadRow').style.display = r.value === 'upload'  ? 'flex' : 'none';
+        _el('ytRow').style.display     = r.value === 'youtube' ? 'flex' : 'none';
+        // If switching away from youtube, pause it
+        if (r.value !== 'youtube' && typeof YtAudio !== 'undefined') YtAudio.pause();
+      });
+    });
+    _el('ytLoadBtn').addEventListener('click', () => {
+      const url = _el('ytUrlInput').value.trim();
+      if (!url) return;
+      if (typeof YtAudio === 'undefined') {
+        _el('ytStatus').textContent = '⚠ youtubeAudio.js not loaded';
+        return;
+      }
+      _el('ytStatus').textContent = 'Loading…';
+      _ytLoaded = false;
+      YtAudio.load(url, {
+        loop: true,
+        onReady: () => {
+          _ytLoaded = true;
+          _el('ytStatus').textContent = '✓ Ready';
+          if (sessionActive && !sessionPaused) {
+            Audio.setMasterVolume(0, 200);
+            YtAudio.play();
+            YtAudio.setVolume(AudioPanel.targetVolume);
+          }
+        },
+        onError: (msg) => {
+          _ytLoaded = false;
+          _el('ytStatus').textContent = `✗ ${msg}`;
+        },
+      });
+    });
 
-    _el('manualThresh')?.addEventListener('input', e => {
-      threshold = +e.target.value;
-      _el('manualThreshVal').textContent = (+e.target.value).toFixed(2);
+    // ── WsClient status watcher for disconnect toast ─────────────
+    // We piggy-back on WsClient by wrapping its existing status callback
+    // rather than replacing it (app.js owns setOnStatus).
+    // Use a CustomEvent on window so app.js can trigger it.
+    window.addEventListener('ws-status', e => {
+      if (e.detail === 'disconnected' && _mounted) _onDisconnect();
     });
   }
 
@@ -397,11 +596,15 @@ const AT = (() => {
     if (!_mounted) return;
     _mounted = false;
     if (sessionActive) _stopSession();
+    if (typeof YtAudio !== 'undefined') YtAudio.destroy();
+    _ytLoaded = false;
+    clearTimeout(_toastTimer);
+    WsClient.setOnFrame(null);
     ChartUtils.destroyAll(charts);
     document.getElementById('modePanel').innerHTML = '';
     // Reset state
     baselineActive = false; baselineBuffer = [];
-    WsClient.setOnFrame(null);
+    sessionPaused  = false;
     hist.labels=[]; hist.delta=[]; hist.theta=[]; hist.alpha=[];
     hist.beta=[]; hist.gamma=[]; hist.atRatio=[]; hist.t0=null;
   }
