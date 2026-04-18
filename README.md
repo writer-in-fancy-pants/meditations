@@ -108,20 +108,28 @@ python -m http.server 8080
 Each device subdirectory can be deployed independently or as git submodules
 of the landing page repo (see `muse-tools/` README).
 
+## Done
+* EEG Alpha/theta meditation for Muse 2
+* Live streaming charts with frequency bands
+* Music integration for meditation
+* HRV training using Whoop
+* HRV integration for Muse 2 PPG stream
+* Refactored to share libraries
+* Shared main landing page for meditations
+* Youtube integration for audio
+* localhost ws connection issue (browser specific) fixed via secure stream using ngrok (alternatively caddy)
+
 ## TODO
 * Fix heart rate calculation in ppg bridge, use ACC?
 * Combine the bridge to provide both heart rate and EEG input at the same time
 * Add a feedback speed control dial with presets in seconds, % of windows [(60, 0.6), (10,0.75), (5, 0.9), (2,0.99)]
 * Instructions at the bottom - start with loud setting, the music goes down with feedback
 * Variations of the project - standalone without monitoring
-* Youtube integration for tracks
 * Pause the graph when session is stopped
 * Reset the graphs on recalibrating
 * Find a fix for streaming breaking (hardware or loop cli call)
 * Add a reminder/notification when connection is broken / no input
 * Test audio upload with rain sounds, Weightless by Marconi Union
-* Integrate Live Neurofeedback into Muse2 dashboard
 * Add an equivalent Muse Athena Live Neurofeedback
-* Fix Tibetan gong sound for long sustain
 * Check maths on neurofeedback, ensure correct ratio is calculated
 * Add better (more meaningful) metrics to the comparator
