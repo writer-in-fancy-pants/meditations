@@ -24,7 +24,7 @@ const AT = (() => {
   const HISTORY_SECONDS  = 120;
   const PUSH_HZ          = 4;
   const MAX_POINTS       = HISTORY_SECONDS * PUSH_HZ;
-  const BASELINE_SECS    = 30;
+  const BASELINE_SECS    = 60;
   const THRESH_DOWN_PCT  = 0.40;
   const THRESH_STEP      = 0.05;
 
