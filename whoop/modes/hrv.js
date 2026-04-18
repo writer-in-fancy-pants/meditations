@@ -33,7 +33,7 @@ const HRV = (() => {
 
     if (baselinePhase) {
       const pct = Math.min(rrBuffer.length / BASELINE_BEATS, 1);
-      _el('hrvStatStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
+      _el('statStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
       if (rrBuffer.length >= BASELINE_BEATS) _finishBaseline();
       return;
     }
@@ -46,12 +46,12 @@ const HRV = (() => {
 
     HrvLib.pushHist(hist, { label, hr: bpm, rr: rrIntervals[0]??null, rv }, MAX_PTS);
     HrvLib.updateCharts(charts, hist, baselineRMSSD);
-    HrvLib.drawGauge('whoopGauge', ci, rv, baselineRMSSD);
-    HrvLib.updateStateBadge('whoopStateBadge', rv, baselineRMSSD);
+    HrvLib.drawGauge('Gauge', ci, rv, baselineRMSSD);
+    HrvLib.updateStateBadge('stateBadge', rv, baselineRMSSD);
 
-    if (bpm !== null) _el('whoopStatHR').innerHTML   = `${bpm}<span class="stat-unit">bpm</span>`;
-    if (rv  !== null) _el('whoopStatRMSSD').innerHTML = `${rv.toFixed(1)}<span class="stat-unit">ms</span>`;
-    if (pv  !== null) _el('whoopStatPNN50').innerHTML = `${pv.toFixed(1)}<span class="stat-unit">%</span>`;
+    if (bpm !== null) _el('statHR').innerHTML   = `${bpm}<span class="stat-unit">bpm</span>`;
+    if (rv  !== null) _el('statRMSSD').innerHTML = `${rv.toFixed(1)}<span class="stat-unit">ms</span>`;
+    if (pv  !== null) _el('statPNN50').innerHTML = `${pv.toFixed(1)}<span class="stat-unit">%</span>`;
 
     const highCoh = rv !== null && baselineRMSSD !== null && rv > baselineRMSSD;
     if (highCoh && !lastCoherence && _el('fbCoherence')?.checked && sessionActive)
@@ -64,7 +64,7 @@ const HRV = (() => {
     // Session duration countdown
     if (sessionActive && sessionDurSec > 0) {
       const rem = Math.max(sessionDurSec - elapsedSec, 0);
-      _el('whoopStatRemaining').textContent = _fmt(rem);
+      _el('statRemaining').textContent = _fmt(rem);
       if (rem === 0) _endSession();
     }
   }
@@ -80,9 +80,9 @@ const HRV = (() => {
   function _finishBaseline() {
     baselinePhase = false;
     baselineRMSSD = HrvLib.computeBaseline(rrBuffer, 60);
-    _el('whoopStatBaseline').textContent = baselineRMSSD ? baselineRMSSD.toFixed(1)+' ms' : '—';
-    _el('whoopStatStatus').textContent   = 'Baseline done';
-    _el('whoopStartBtn').disabled        = false;
+    _el('statBaseline').textContent = baselineRMSSD ? baselineRMSSD.toFixed(1)+' ms' : '—';
+    _el('statStatus').textContent   = 'Baseline done';
+    _el('startBtn').disabled        = false;
     rrBuffer = [];
   }
 
@@ -90,11 +90,11 @@ const HRV = (() => {
   function _startSession() {
     sessionDurSec = (+(_el('sessionDur')?.value || 20)) * 60;
     sessionActive = true; elapsedSec = 0;
-    _el('whoopStatStatus').textContent   = 'Training';
-    _el('whoopStartBtn').disabled        = true;
-    _el('whoopStopBtn').disabled         = false;
-    _el('whoopBaselineBtn').disabled     = true;
-    _el('whoopStatRemaining').textContent= sessionDurSec > 0 ? _fmt(sessionDurSec) : '—';
+    _el('statStatus').textContent   = 'Training';
+    _el('startBtn').disabled        = true;
+    _el('stopBtn').disabled         = false;
+    _el('BaselineBtn').disabled     = true;
+    _el('statRemaining').textContent= sessionDurSec > 0 ? _fmt(sessionDurSec) : '—';
     AudioPanel.startSelectedSound();
     if (_el('fbBeep')?.checked)
       Audio.scheduleBeep(+(_el('beepInterval')?.value||30),
@@ -103,7 +103,7 @@ const HRV = (() => {
         () => sessionActive);
     timerInterval = setInterval(() => {
       elapsedSec++;
-      _el('whoopStatElapsed').textContent = _fmt(elapsedSec);
+      _el('statElapsed').textContent = _fmt(elapsedSec);
     }, 1000);
   }
 
@@ -114,15 +114,15 @@ const HRV = (() => {
     Audio.cancelBeep();
     Audio.stopSound();
     if (_el('fbEndAlarm')?.checked) Audio.endAlarm();
-    _el('whoopStatStatus').textContent = 'Complete';
-    _el('whoopStartBtn').disabled      = false;
-    _el('whoopStopBtn').disabled       = true;
-    _el('whoopBaselineBtn').disabled   = false;
+    _el('statStatus').textContent = 'Complete';
+    _el('startBtn').disabled      = false;
+    _el('stopBtn').disabled       = true;
+    _el('BaselineBtn').disabled   = false;
     // Show summary
-    const summaryEl = _el('whoopSummary');
+    const summaryEl = _el('summary');
     if (summaryEl) {
       summaryEl.innerHTML = HrvLib.sessionSummary(rrBuffer, hist, elapsedSec, baselineRMSSD);
-      _el('whoopEndOverlay').style.display = 'flex';
+      _el('EndOverlay').style.display = 'flex';
     }
   }
 
@@ -142,35 +142,35 @@ const HRV = (() => {
         <input type="number" id="sessionDur" class="dur-input" min="1" max="120" value="20" />
         <span class="dur-unit">min</span>
       </label>
-      <button class="btn-sm" id="whoopBaselineBtn">Calibrate baseline (2 min)</button>
-      <button class="btn-sm btn-accent" id="whoopStartBtn">Start training</button>
-      <button class="btn-sm btn-danger" id="whoopStopBtn" disabled>Stop</button>
+      <button class="btn-sm" id="BaselineBtn">Calibrate baseline (2 min)</button>
+      <button class="btn-sm btn-accent" id="startBtn">Start training</button>
+      <button class="btn-sm btn-danger" id="stopBtn" disabled>Stop</button>
     </div>
   </div>
   <div class="stat-row">
-    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="whoopStatStatus">Idle</span></div>
-    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="whoopStatElapsed">0:00</span></div>
-    <div class="stat"><span class="stat-lbl">Remaining</span><span class="stat-val" id="whoopStatRemaining">—</span></div>
-    <div class="stat"><span class="stat-lbl">Heart rate</span><span class="stat-val" id="whoopStatHR">—</span></div>
-    <div class="stat"><span class="stat-lbl">RMSSD</span><span class="stat-val" id="whoopStatRMSSD">—</span></div>
-    <div class="stat"><span class="stat-lbl">pNN50</span><span class="stat-val" id="whoopStatPNN50">—</span></div>
-    <div class="stat"><span class="stat-lbl">Baseline</span><span class="stat-val" id="whoopStatBaseline">—</span></div>
+    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="statStatus">Idle</span></div>
+    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="statElapsed">0:00</span></div>
+    <div class="stat"><span class="stat-lbl">Remaining</span><span class="stat-val" id="statRemaining">—</span></div>
+    <div class="stat"><span class="stat-lbl">Heart rate</span><span class="stat-val" id="statHR">—</span></div>
+    <div class="stat"><span class="stat-lbl">RMSSD</span><span class="stat-val" id="statRMSSD">—</span></div>
+    <div class="stat"><span class="stat-lbl">pNN50</span><span class="stat-val" id="statPNN50">—</span></div>
+    <div class="stat"><span class="stat-lbl">Baseline</span><span class="stat-val" id="statBaseline">—</span></div>
   </div>
 </section>
 <div class="charts-row">
   <div class="chart-card" style="flex:1">
     <div class="chart-hdr"><span class="chart-title">Heart rate</span><span class="chart-sub">BPM</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="whoopHRChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="HRChart"></canvas></div>
   </div>
   <div class="chart-card" style="flex:1">
     <div class="chart-hdr"><span class="chart-title">RR tachogram</span><span class="chart-sub">Beat-to-beat · ms</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="whoopRRChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="RRChart"></canvas></div>
   </div>
 </div>
 <div class="charts-row">
   <div class="chart-card" style="flex:1.4">
     <div class="chart-hdr"><span class="chart-title">Rolling RMSSD</span><span class="chart-sub">30-beat window</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="whoopRMSSDChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="RMSSDChart"></canvas></div>
     <div class="band-legend">
       <span class="bl-item" style="--c:#2db891">RMSSD (ms)</span>
       <span class="bl-item" style="--c:rgba(255,140,60,0.55)">— Baseline</span>
@@ -180,8 +180,8 @@ const HRV = (() => {
     <div class="chart-hdr" style="text-align:center;width:100%">
       <span class="chart-title">Coherence</span><span class="chart-sub">LF power ratio</span>
     </div>
-    <canvas id="whoopGauge" width="180" height="180"></canvas>
-    <div class="hrv-state-badge" id="whoopStateBadge">Waiting for data</div>
+    <canvas id="Gauge" width="180" height="180"></canvas>
+    <div class="hrv-state-badge" id="stateBadge">Waiting for data</div>
   </div>
 </div>
 <div class="controls-row">
@@ -228,11 +228,11 @@ const HRV = (() => {
   </section>
 </div>
 <!-- End overlay -->
-<div class="end-overlay" id="whoopEndOverlay" style="display:none">
+<div class="end-overlay" id="EndOverlay" style="display:none">
   <div class="end-card">
     <h2 class="end-title">Session complete</h2>
-    <div class="end-stats" id="whoopSummary"></div>
-    <button class="btn-primary end-close" id="whoopEndClose">Done</button>
+    <div class="end-stats" id="summary"></div>
+    <button class="btn-primary end-close" id="EndClose">Done</button>
   </div>
 </div>`;
 
@@ -242,23 +242,23 @@ const HRV = (() => {
     _mounted = true;
     document.getElementById('modePanel').innerHTML = TEMPLATE;
     Object.assign(charts, HrvLib.initCharts({
-      hrId:'whoopHRChart', rrId:'whoopRRChart', rmssdId:'whoopRMSSDChart', maxPts: MAX_PTS
+      hrId:'HRChart', rrId:'RRChart', rmssdId:'RMSSDChart', maxPts: MAX_PTS
     }));
     AudioPanel.init(() => sessionActive);
     WsClient.setOnFrame(_onWsFrame);
 
-    _el('whoopBaselineBtn').addEventListener('click', () => {
+    _el('BaselineBtn').addEventListener('click', () => {
       if (!WsClient.isConnected() && !BleClient.isConnected()) {
         alert('Connect to WHOOP (BLE or bridge) first.'); return;
       }
       baselinePhase = true; rrBuffer = [];
-      _el('whoopStartBtn').disabled = true;
-      _el('whoopStatStatus').textContent = 'Calibrating…';
+      _el('startBtn').disabled = true;
+      _el('statStatus').textContent = 'Calibrating…';
     });
-    _el('whoopStartBtn').addEventListener('click', _startSession);
-    _el('whoopStopBtn').addEventListener('click',  _endSession);
-    _el('whoopEndClose')?.addEventListener('click', () => {
-      _el('whoopEndOverlay').style.display = 'none';
+    _el('startBtn').addEventListener('click', _startSession);
+    _el('stopBtn').addEventListener('click',  _endSession);
+    _el('EndClose')?.addEventListener('click', () => {
+      _el('EndOverlay').style.display = 'none';
     });
     _el('beepInterval')?.addEventListener('input', e => {
       _el('beepIntervalVal').textContent = e.target.value+' s';

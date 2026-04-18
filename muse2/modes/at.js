@@ -16,7 +16,7 @@ const AT = (() => {
   const HISTORY_SECONDS = 120;
   const PUSH_HZ         = 4;
   const MAX_POINTS      = HISTORY_SECONDS * PUSH_HZ;
-  const BASELINE_SECS   = 30;
+  const BASELINE_SECS   = 60;
   const BLOCK_SECS      = 60;
   const THRESH_UP_PCT   = 0.60;
   const THRESH_DOWN_PCT = 0.40;
@@ -51,18 +51,18 @@ const AT = (() => {
   <div class="section-hdr">
     <span class="section-title">α/θ Session</span>
     <div class="session-actions">
-      <button class="btn-sm" id="atBaselineBtn">Calibrate baseline (30 s)</button>
-      <button class="btn-sm btn-accent" id="atStartBtn">Start training</button>
-      <button class="btn-sm btn-danger" id="atStopBtn" disabled>Stop</button>
+      <button class="btn-sm" id="BaselineBtn">Calibrate baseline (60 s)</button>
+      <button class="btn-sm btn-accent" id="startBtn">Start training</button>
+      <button class="btn-sm btn-danger" id="stopBtn" disabled>Stop</button>
     </div>
   </div>
   <div class="stat-row">
-    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="atStatStatus">Idle</span></div>
-    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="atStatElapsed">0:00</span></div>
-    <div class="stat"><span class="stat-lbl">α/θ ratio</span><span class="stat-val" id="atStatAT">—</span></div>
-    <div class="stat"><span class="stat-lbl">α power</span><span class="stat-val" id="atStatAlpha">—</span></div>
-    <div class="stat"><span class="stat-lbl">θ power</span><span class="stat-val" id="atStatTheta">—</span></div>
-    <div class="stat"><span class="stat-lbl">Threshold</span><span class="stat-val" id="atStatThresh">—</span></div>
+    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="statStatus">Idle</span></div>
+    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="statElapsed">0:00</span></div>
+    <div class="stat"><span class="stat-lbl">θ/α ratio</span><span class="stat-val" id="statAT">—</span></div>
+    <div class="stat"><span class="stat-lbl">α power</span><span class="stat-val" id="statAlpha">—</span></div>
+    <div class="stat"><span class="stat-lbl">θ power</span><span class="stat-val" id="statTheta">—</span></div>
+    <div class="stat"><span class="stat-lbl">Threshold</span><span class="stat-val" id="statThresh">—</span></div>
   </div>
 </section>
 
@@ -72,7 +72,7 @@ const AT = (() => {
       <span class="chart-title">Live band powers</span>
       <span class="chart-sub">All channels averaged · 4 Hz update</span>
     </div>
-    <div class="chart-wrap" style="height:220px"><canvas id="atBandChart"></canvas></div>
+    <div class="chart-wrap" style="height:220px"><canvas id="BandChart"></canvas></div>
     <div class="band-legend">
       <span class="bl-item" style="--c:#6b7db3">δ Delta</span>
       <span class="bl-item" style="--c:#7c75e0">θ Theta</span>
@@ -86,14 +86,14 @@ const AT = (() => {
       <span class="chart-title">α / θ neurofeedback</span>
       <span class="chart-sub">Peniston protocol · θ/α crossover goal</span>
     </div>
-    <div class="chart-wrap" style="height:220px"><canvas id="atRatioChart"></canvas></div>
+    <div class="chart-wrap" style="height:220px"><canvas id="RatioChart"></canvas></div>
     <div class="band-legend">
       <span class="bl-item" style="--c:#2db891">α Alpha</span>
       <span class="bl-item" style="--c:#7c75e0">θ Theta</span>
       <span class="bl-item" style="--c:#e07050">θ/α ratio</span>
       <span class="bl-item threshold-item">— Threshold</span>
     </div>
-    <div class="crossover-badge" id="atCrossoverBadge">θ > α</div>
+    <div class="crossover-badge" id="CrossoverBadge">θ > α</div>
   </div>
 </div>
 
@@ -169,8 +169,9 @@ const AT = (() => {
   function _initCharts() {
     const cc    = ChartUtils.colors();
     const empty = () => Array(MAX_POINTS).fill(null);
+    const intCb = v => Math.round(v);
 
-    charts.band = new Chart(document.getElementById('atBandChart'), {
+    charts.band = ChartUtils.buildChart(document.getElementById('BandChart'), {
       type: 'line',
       data: {
         labels: empty(),
@@ -182,14 +183,10 @@ const AT = (() => {
           ChartUtils.makeDataset('γ Gamma', BAND_COLORS.gamma, empty()),
         ],
       },
-      options: {
-        responsive: true, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
-        scales: { x: ChartUtils.scaleX(cc), y: ChartUtils.scaleY(cc, 'Power (µV²/Hz)') },
-      },
+      options: ChartUtils.opts(cc, 'Power (µV²/Hz)', intCb),
     });
 
-    charts.at = new Chart(document.getElementById('atRatioChart'), {
+    charts.at = ChartUtils.buildChart(document.getElementById('RatioChart'), {
       type: 'line',
       data: {
         labels: empty(),
@@ -215,6 +212,8 @@ const AT = (() => {
         },
       },
     });
+
+    ChartUtils.enableResetZoomShortcut(charts);
   }
 
   /* ── Frame processing ───────────────────────────────────────────── */
@@ -258,7 +257,7 @@ const AT = (() => {
 
     // Crossover
     const crossover = theta > alpha;
-    const badge = document.getElementById('atCrossoverBadge');
+    const badge = document.getElementById('CrossoverBadge');
     if (badge) badge.classList.toggle('visible', crossover);
     if (crossover && !lastCrossover && document.getElementById('fbCrossover')?.checked && sessionActive) {
       Audio.crossoverChime();
@@ -266,10 +265,10 @@ const AT = (() => {
     lastCrossover = crossover;
 
     // Stats
-    _el('atStatAT').textContent    = atRatio.toFixed(3);
-    _el('atStatAlpha').textContent = alpha.toExponential(2);
-    _el('atStatTheta').textContent = theta.toExponential(2);
-    _el('atStatThresh').textContent= threshold.toFixed(2);
+    _el('statAT').textContent    = atRatio.toFixed(3);
+    _el('statAlpha').textContent = alpha.toExponential(2);
+    _el('statTheta').textContent = theta.toExponential(2);
+    _el('statThresh').textContent= threshold.toFixed(2);
 
     // Training
     if (sessionActive) {
@@ -295,7 +294,7 @@ const AT = (() => {
     if (baselineActive) {
       baselineBuffer.push({ alpha, theta, atRatio });
       const pct = Math.min(baselineBuffer.length / (BASELINE_SECS * PUSH_HZ), 1);
-      _el('atStatStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
+      _el('statStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
       if (baselineBuffer.length >= BASELINE_SECS * PUSH_HZ) _finishBaseline();
     }
   }
@@ -309,8 +308,8 @@ const AT = (() => {
     threshold = Math.max(0.2, Math.min(baseline.atRatio * 0.95, 3.0));
     _el('manualThresh').value         = threshold.toFixed(2);
     _el('manualThreshVal').textContent = threshold.toFixed(2);
-    _el('atStatStatus').textContent   = 'Baseline done';
-    _el('atStartBtn').disabled        = false;
+    _el('statStatus').textContent   = 'Baseline done';
+    _el('startBtn').disabled        = false;
     baselineBuffer = [];
   }
 
@@ -320,10 +319,10 @@ const AT = (() => {
     sessionActive = true;
     hist.t0 = Date.now();
     elapsedSec = blockTimer = blockAbove = 0;
-    _el('atStatStatus').textContent = 'Training';
-    _el('atStartBtn').disabled      = true;
-    _el('atStopBtn').disabled       = false;
-    _el('atBaselineBtn').disabled   = true;
+    _el('statStatus').textContent = 'Training';
+    _el('startBtn').disabled      = true;
+    _el('stopBtn').disabled       = false;
+    _el('BaselineBtn').disabled   = true;
 
     AudioPanel.startSelectedSound();
 
@@ -339,7 +338,7 @@ const AT = (() => {
       elapsedSec++;
       const m = String(Math.floor(elapsedSec/60));
       const s = String(elapsedSec%60).padStart(2,'0');
-      _el('atStatElapsed').textContent = `${m}:${s}`;
+      _el('statElapsed').textContent = `${m}:${s}`;
     }, 1000);
   }
 
@@ -348,10 +347,10 @@ const AT = (() => {
     clearInterval(timerInterval);
     Audio.cancelBeep();
     Audio.stopSound();
-    _el('atStatStatus').textContent = 'Stopped';
-    _el('atStartBtn').disabled      = false;
-    _el('atStopBtn').disabled       = true;
-    _el('atBaselineBtn').disabled   = false;
+    _el('statStatus').textContent = 'Stopped';
+    _el('startBtn').disabled      = false;
+    _el('stopBtn').disabled       = true;
+    _el('BaselineBtn').disabled   = false;
   }
 
   /* ── Helpers ────────────────────────────────────────────────────── */
@@ -370,14 +369,14 @@ const AT = (() => {
     // app.js owns the socket; we only swap the onFrame handler.
     WsClient.setOnFrame(_onFrame);
 
-    _el('atBaselineBtn').addEventListener('click', () => {
+    _el('BaselineBtn').addEventListener('click', () => {
       if (!WsClient.isConnected()) { alert('Connect to the bridge first.'); return; }
       baselineActive = true; baselineBuffer = [];
-      _el('atStartBtn').disabled = true;
-      _el('atStatStatus').textContent = 'Calibrating…';
+      _el('startBtn').disabled = true;
+      _el('statStatus').textContent = 'Calibrating…';
     });
-    _el('atStartBtn').addEventListener('click', _startSession);
-    _el('atStopBtn').addEventListener('click',  _stopSession);
+    _el('startBtn').addEventListener('click', _startSession);
+    _el('stopBtn').addEventListener('click',  _stopSession);
 
     _el('beepInterval')?.addEventListener('input', e => {
       _el('beepIntervalVal').textContent = e.target.value + ' s';

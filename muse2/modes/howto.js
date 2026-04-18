@@ -48,7 +48,9 @@ const HowTo = (() => {
       <h3 class="howto-h3">Procedure</h3>
       <ol class="howto-list howto-ol">
         <li>Connect to the muselsl bridge (<code>python bridge.py</code>) from the topbar.</li>
-        <li>Sit comfortably, eyes closed, and click <strong>Calibrate baseline</strong>. Hold still for 30 s.</li>
+        <li>Sit comfortably, eyes closed, and click <strong>Calibrate baseline</strong>. Hold still for 60 s.</li>
+        <li>Choose preferred music, if needed. Adjust volume. The volume will drop lower as you go deeper. That's the feedback. </li>
+        <li> Enable "Auto-adjust threshold" to make the training adapt to you - also resets the volume. Disable it if you know what you're doing.</li>
         <li>Click <strong>Start training</strong>. Eyes remain closed throughout.</li>
         <li>Aim to enter a passive, daydream-like state — do not actively try to control anything.</li>
         <li>The crossover chime and tone feedback guide you without requiring visual monitoring.</li>
@@ -84,9 +86,10 @@ const HowTo = (() => {
       </ul>
       <h3 class="howto-h3">Procedure</h3>
       <ol class="howto-list howto-ol">
-        <li>Connect the bridge (<code>python bridge.py</code> for WHOOP, or muselsl for Muse 2 PPG).</li>
-        <li>Sit still, eyes closed. Click <strong>Calibrate baseline</strong> and rest for 2 min.</li>
+        <li>Connect the bridge (<code>python bridge.py</code> via muselsl for Muse 2 PPG).</li>
+        <li>Click <strong>Calibrate baseline</strong> - Sit still, eyes closed for 2 minutes.</li>
         <li>Enable the <strong>breathing pacer</strong> and start at 5.5 breaths/min.</li>
+        <li>Choose a different breathing setting if needed, whichever feels natural.</li>
         <li>Breathe slowly and deeply into the belly — abdomen expands on inhale, relaxes on exhale.</li>
         <li>Click <strong>Start training</strong>. Adjust the pacer rate ±0.5 /min until the gauge peaks.</li>
         <li>Sessions of 20 min daily, 10+ sessions over 5 weeks, are the standard protocol.</li>

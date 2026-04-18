@@ -23,7 +23,7 @@
 const HRV = (() => {
   /* ── Constants ──────────────────────────────────────────────────── */
   const PPG_FS          = 64;          // Muse 2 PPG sample rate (Hz)
-  const RR_WINDOW       = 30;          // beats for rolling RMSSD
+  // const RR_WINDOW       = 30;          // beats for rolling RMSSD
   const BASELINE_BEATS  = 120;         // ~2 min at 60 bpm
   const COHERENCE_WIN   = 60;          // beats for coherence DFT
   const MAX_CHART_PTS   = 300;
@@ -45,46 +45,8 @@ const HRV = (() => {
   let lastCoherence  = false;
   let _mounted       = false;
 
-  const hist = { labels:[], hr:[], rr:[], rmssd:[], t0:null };
-  const charts = { hr:null, rr:null, rmssd:null };
-
-  /* ── HRV math ───────────────────────────────────────────────────── */
-
-  function _rmssd(rr) {
-    if (rr.length < 2) return null;
-    let sum = 0;
-    for (let i = 1; i < rr.length; i++) { const d = rr[i]-rr[i-1]; sum += d*d; }
-    return Math.sqrt(sum / (rr.length-1));
-  }
-
-  function _pnn50(rr) {
-    if (rr.length < 2) return null;
-    let n = 0;
-    for (let i = 1; i < rr.length; i++) if (Math.abs(rr[i]-rr[i-1]) > 50) n++;
-    return (n / (rr.length-1)) * 100;
-  }
-
-  function _coherence(rr) {
-    const seg = rr.slice(-Math.min(rr.length, COHERENCE_WIN));
-    if (seg.length < 20) return 0;
-    const meanRR   = seg.reduce((a,b)=>a+b,0)/seg.length/1000;
-    const fs       = 1/meanRR;
-    const N        = seg.length;
-    let total=0, lf=0;
-    for (let k = 0; k < N/2; k++) {
-      let re=0, im=0;
-      for (let n = 0; n < N; n++) {
-        const a = -2*Math.PI*k*n/N;
-        re += seg[n]*Math.cos(a); im += seg[n]*Math.sin(a);
-      }
-      const pow  = (re*re+im*im)/N;
-      const freq = k*fs/N;
-      total += pow;
-      if (freq >= 0.04 && freq <= 0.15) lf += pow;
-    }
-    return total > 0 ? Math.min(lf/total, 1) : 0;
-  }
-
+  const hist  = HrvLib.makeHist();
+  const charts = {};
   /* ── PPG peak detector ─────────────────────────────────────────── */
   // Simple derivative-zero-crossing peak detector on the BVP signal.
   // Muse 2 BVP is the derivative of the PPG, so peaks in BVP ~= R-peaks.
@@ -148,31 +110,30 @@ const HRV = (() => {
     // Baseline collection
     if (baselinePhase) {
       const pct = Math.min(rrBuffer.length / BASELINE_BEATS, 1);
-      _el('hrvStatStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
+      _el('statStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
       if (rrBuffer.length >= BASELINE_BEATS) _finishBaseline();
       return;
     }
 
-    const window = rrBuffer.slice(-RR_WINDOW);
-    const rv     = _rmssd(window);
-    const pv     = _pnn50(window);
-    const ci     = _coherence(rrBuffer);
+    const window = rrBuffer.slice(-HrvLib.RR_WINDOW);
+    const rv = HrvLib.rmssd(window);
+    const pv = HrvLib.pnn50(window);
+    const ci = HrvLib.coherenceIndex(rrBuffer);
     const hr     = bpm ?? (rv ? Math.round(60000/(rrBuffer.slice(-1)[0]||800)) : null);
     const label  = sessionActive && hist.t0 ? String(Math.floor((Date.now()-hist.t0)/1000)) : '';
 
-    const P = MAX_CHART_PTS;
-    ChartUtils.rollingPush(hist.labels, label,          P);
-    ChartUtils.rollingPush(hist.hr,     hr??null,       P);
-    ChartUtils.rollingPush(hist.rr,     newRR[0]??null, P);
-    ChartUtils.rollingPush(hist.rmssd,  rv,             P);
+    //_updateCharts(rv);
+    //_drawGauge(ci, rv);
 
-    _updateCharts(rv);
-    _drawGauge(ci, rv);
+    HrvLib.pushHist(hist, { label, hr: bpm, rr: rrIntervals[0]??null, rv }, MAX_CHART_PTS);
+    HrvLib.updateCharts(charts, hist, baselineRMSSD);
+    HrvLib.drawGauge('muse2Gauge', ci, rv, baselineRMSSD);
+    HrvLib.updateStateBadge('muse2StateBadge', rv, baselineRMSSD);
 
     // Stats
-    if (hr  !== null) _el('hrvStatHR').innerHTML  = `${hr}<span class="stat-unit">bpm</span>`;
-    if (rv  !== null) _el('hrvStatRMSSD').innerHTML= `${rv.toFixed(1)}<span class="stat-unit">ms</span>`;
-    if (pv  !== null) _el('hrvStatPNN50').innerHTML= `${pv.toFixed(1)}<span class="stat-unit">%</span>`;
+    if (hr  !== null) _el('statHR').innerHTML  = `${hr}<span class="stat-unit">bpm</span>`;
+    if (rv  !== null) _el('statRMSSD').innerHTML= `${rv.toFixed(1)}<span class="stat-unit">ms</span>`;
+    if (pv  !== null) _el('statPNN50').innerHTML= `${pv.toFixed(1)}<span class="stat-unit">%</span>`;
 
     // Coherence chime
     const highCoh = rv !== null && baselineRMSSD !== null && rv > baselineRMSSD;
@@ -189,121 +150,32 @@ const HRV = (() => {
 
   function _finishBaseline() {
     baselinePhase = false;
-    const rv = _rmssd(rrBuffer);
+    const rv = HrvLib.rmssd(rrBuffer);
     baselineRMSSD = rv;
-    _el('hrvStatBaseline').textContent = rv ? rv.toFixed(1)+' ms' : '—';
-    _el('hrvStatStatus').textContent   = 'Baseline done';
-    _el('hrvStartBtn').disabled        = false;
+    _el('statBaseline').textContent = rv ? rv.toFixed(1)+' ms' : '—';
+    _el('statStatus').textContent   = 'Baseline done';
+    _el('startBtn').disabled        = false;
     rrBuffer = [];
   }
-
-  /* ── Gauge canvas ───────────────────────────────────────────────── */
-
-  function _drawGauge(coherence, rv) {
-    const canvas = _el('hrvGauge');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const w=canvas.width, h=canvas.height, cx=w/2, cy=h/2+10, r=70;
-    ctx.clearRect(0,0,w,h);
-    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-    const trackCol = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
-    ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,0);
-    ctx.strokeStyle=trackCol; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
-
-    const arcColor = coherence>0.55 ? (isDark?'#2db891':'#1a9e75')
-                   : coherence>0.3  ? (isDark?'#d0901a':'#b07010')
-                   :                  (isDark?'#e05050':'#c03030');
-    ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,Math.PI+coherence*Math.PI);
-    ctx.strokeStyle=arcColor; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
-
-    const na = Math.PI+coherence*Math.PI;
-    ctx.beginPath(); ctx.moveTo(cx,cy);
-    ctx.lineTo(cx+(r-8)*Math.cos(na), cy+(r-8)*Math.sin(na));
-    ctx.strokeStyle=isDark?'#e8eaf0':'#111827'; ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke();
-    ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2);
-    ctx.fillStyle=isDark?'#e8eaf0':'#111827'; ctx.fill();
-
-    ctx.font='10px monospace'; ctx.fillStyle=isDark?'#555d78':'#9ca3af';
-    ctx.textAlign='left';  ctx.fillText('low',  cx-r-2, cy+18);
-    ctx.textAlign='right'; ctx.fillText('high', cx+r+2, cy+18);
-    ctx.textAlign='center'; ctx.font='13px monospace';
-    ctx.fillStyle=isDark?'#e8eaf0':'#111827';
-    ctx.fillText((coherence*100).toFixed(0)+'%', cx, cy-r+18);
-
-    const pv = _pnn50(rrBuffer.slice(-RR_WINDOW));
-    const badge = _el('hrvStateBadge');
-    if (badge) {
-      if (rv !== null && baselineRMSSD !== null) {
-        if (rv >= baselineRMSSD*1.1)  { badge.textContent='High coherence ↑'; badge.className='hrv-state-badge good'; }
-        else if (rv < baselineRMSSD*0.85) { badge.textContent='Below baseline ↓'; badge.className='hrv-state-badge low'; }
-        else                           { badge.textContent='Near baseline →';   badge.className='hrv-state-badge'; }
-      }
-    }
-  }
-
-  /* ── Charts ─────────────────────────────────────────────────────── */
-
-  function _initCharts() {
-    const cc    = ChartUtils.colors();
-    const empty = () => Array(MAX_CHART_PTS).fill(null);
-    const intCb = v => Math.round(v);
-
-    charts.hr = new Chart(_el('hrvHRChart'), {
-      type:'line',
-      data:{ labels:empty(), datasets:[ChartUtils.makeDataset('HR','#e07050',empty())] },
-      options:{ responsive:true, maintainAspectRatio:false, animation:false,
-        plugins:{legend:{display:false}},
-        scales:{ x:ChartUtils.scaleX(cc), y:ChartUtils.scaleY(cc,'BPM',intCb) } },
-    });
-
-    charts.rr = new Chart(_el('hrvRRChart'), {
-      type:'line',
-      data:{ labels:empty(), datasets:[ChartUtils.makeDataset('RR','#7c75e0',empty())] },
-      options:{ responsive:true, maintainAspectRatio:false, animation:false,
-        plugins:{legend:{display:false}},
-        scales:{ x:ChartUtils.scaleX(cc), y:ChartUtils.scaleY(cc,'ms',intCb) } },
-    });
-
-    charts.rmssd = new Chart(_el('hrvRMSSDChart'), {
-      type:'line',
-      data:{ labels:empty(), datasets:[
-        ChartUtils.makeDataset('RMSSD','#2db891',empty()),
-        ChartUtils.makeDataset('Baseline','rgba(255,140,60,0.55)',empty(),'y',{borderDash:[5,4],spanGaps:false,backgroundColor:'transparent'}),
-      ]},
-      options:{ responsive:true, maintainAspectRatio:false, animation:false,
-        plugins:{legend:{display:false}},
-        scales:{ x:ChartUtils.scaleX(cc), y:ChartUtils.scaleY(cc,'RMSSD (ms)',intCb) } },
-    });
-  }
-
-  function _updateCharts(rv) {
-    const L = [...hist.labels];
-    charts.hr.data.labels=L; charts.hr.data.datasets[0].data=[...hist.hr]; charts.hr.update('none');
-    charts.rr.data.labels=L; charts.rr.data.datasets[0].data=[...hist.rr]; charts.rr.update('none');
-    charts.rmssd.data.labels=L;
-    charts.rmssd.data.datasets[0].data=[...hist.rmssd];
-    charts.rmssd.data.datasets[1].data=new Array(L.length).fill(baselineRMSSD);
-    charts.rmssd.update('none');
-  }
-
+  
   /* ── Session control ────────────────────────────────────────────── */
 
   function _startSession() {
     sessionActive=true; hist.t0=Date.now(); elapsedSec=0;
-    _el('hrvStatStatus').textContent='Training';
-    _el('hrvStartBtn').disabled=true;
-    _el('hrvStopBtn').disabled=false;
-    _el('hrvBaselineBtn').disabled=true;
+    _el('statStatus').textContent='Training';
+    _el('startBtn').disabled=true;
+    _el('stopBtn').disabled=false;
+    _el('BaselineBtn').disabled=true;
     AudioPanel.startSelectedSound();
     const beepSec = +(_el('beepInterval')?.value||30);
     if (_el('fbBeep')?.checked) {
       Audio.scheduleBeep(beepSec,
-        () => ({ score: _rmssd(rrBuffer.slice(-RR_WINDOW))??0, threshold: baselineRMSSD??1 }),
+        () => ({ score: HrvLib.rmssd(rrBuffer.slice(-RR_WINDOW))??0, threshold: baselineRMSSD??1 }),
         () => sessionActive);
     }
     timerInterval = setInterval(()=>{
       elapsedSec++;
-      _el('hrvStatElapsed').textContent =
+      _el('statElapsed').textContent =
         String(Math.floor(elapsedSec/60))+':'+String(elapsedSec%60).padStart(2,'0');
     },1000);
   }
@@ -313,10 +185,10 @@ const HRV = (() => {
     clearInterval(timerInterval);
     Audio.cancelBeep();
     Audio.stopSound();
-    _el('hrvStatStatus').textContent='Stopped';
-    _el('hrvStartBtn').disabled=false;
-    _el('hrvStopBtn').disabled=true;
-    _el('hrvBaselineBtn').disabled=false;
+    _el('statStatus').textContent='Stopped';
+    _el('startBtn').disabled=false;
+    _el('stopBtn').disabled=true;
+    _el('BaselineBtn').disabled=false;
   }
 
   function _el(id) { return document.getElementById(id); }
@@ -328,9 +200,9 @@ const HRV = (() => {
   <div class="section-hdr">
     <span class="section-title">HRV Session</span>
     <div class="session-actions">
-      <button class="btn-sm" id="hrvBaselineBtn">Calibrate baseline (2 min)</button>
-      <button class="btn-sm btn-accent" id="hrvStartBtn">Start training</button>
-      <button class="btn-sm btn-danger" id="hrvStopBtn" disabled>Stop</button>
+      <button class="btn-sm" id="BaselineBtn">Calibrate baseline (2 min)</button>
+      <button class="btn-sm btn-accent" id="startBtn">Start training</button>
+      <button class="btn-sm btn-danger" id="stopBtn" disabled>Stop</button>
     </div>
   </div>
   <p class="ctrl-desc" style="margin-bottom:.5rem">
@@ -338,30 +210,30 @@ const HRV = (() => {
     <code>{ type:"rr", bpm, rr_ms }</code> frames from bridge.py or hr_rr_simulator.py.
   </p>
   <div class="stat-row">
-    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="hrvStatStatus">Idle</span></div>
-    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="hrvStatElapsed">0:00</span></div>
-    <div class="stat"><span class="stat-lbl">Heart rate</span><span class="stat-val" id="hrvStatHR">—</span></div>
-    <div class="stat"><span class="stat-lbl">RMSSD</span><span class="stat-val" id="hrvStatRMSSD">—</span></div>
-    <div class="stat"><span class="stat-lbl">pNN50</span><span class="stat-val" id="hrvStatPNN50">—</span></div>
-    <div class="stat"><span class="stat-lbl">Baseline RMSSD</span><span class="stat-val" id="hrvStatBaseline">—</span></div>
+    <div class="stat"><span class="stat-lbl">Status</span><span class="stat-val" id="statStatus">Idle</span></div>
+    <div class="stat"><span class="stat-lbl">Elapsed</span><span class="stat-val" id="statElapsed">0:00</span></div>
+    <div class="stat"><span class="stat-lbl">Heart rate</span><span class="stat-val" id="statHR">—</span></div>
+    <div class="stat"><span class="stat-lbl">RMSSD</span><span class="stat-val" id="statRMSSD">—</span></div>
+    <div class="stat"><span class="stat-lbl">pNN50</span><span class="stat-val" id="statPNN50">—</span></div>
+    <div class="stat"><span class="stat-lbl">Baseline RMSSD</span><span class="stat-val" id="statBaseline">—</span></div>
   </div>
 </section>
 
 <div class="charts-row">
   <div class="chart-card" style="flex:1">
     <div class="chart-hdr"><span class="chart-title">Heart rate</span><span class="chart-sub">BPM · live</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="hrvHRChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="HRChart"></canvas></div>
   </div>
   <div class="chart-card" style="flex:1">
     <div class="chart-hdr"><span class="chart-title">RR tachogram</span><span class="chart-sub">Beat-to-beat interval · ms</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="hrvRRChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="RRChart"></canvas></div>
   </div>
 </div>
 
 <div class="charts-row">
   <div class="chart-card" style="flex:1.4">
     <div class="chart-hdr"><span class="chart-title">HRV — rolling RMSSD</span><span class="chart-sub">30-beat window · ms · parasympathetic tone</span></div>
-    <div class="chart-wrap" style="height:200px"><canvas id="hrvRMSSDChart"></canvas></div>
+    <div class="chart-wrap" style="height:200px"><canvas id="RMSSDChart"></canvas></div>
     <div class="band-legend">
       <span class="bl-item" style="--c:#2db891">RMSSD (ms)</span>
       <span class="bl-item" style="--c:rgba(255,140,60,0.55)">— Baseline</span>
@@ -372,8 +244,8 @@ const HRV = (() => {
       <span class="chart-title">HRV coherence</span>
       <span class="chart-sub">LF power ratio · 0.04–0.15 Hz</span>
     </div>
-    <canvas id="hrvGauge" width="180" height="180"></canvas>
-    <div class="hrv-state-badge" id="hrvStateBadge">Waiting for data</div>
+    <canvas id="Gauge" width="180" height="180"></canvas>
+    <div class="hrv-state-badge" id="stateBadge">Waiting for data</div>
   </div>
 </div>
 
@@ -430,7 +302,7 @@ const HRV = (() => {
   <section class="ctrl-card">
     <div class="ctrl-title">Breathing pacer</div>
     <p class="ctrl-desc">Resonant frequency breathing — 5–6 breaths/min maximises HRV coherence.</p>
-    <label class="fb-chk"><input type="checkbox" id="hrvBreathPacer" />
+    <label class="fb-chk"><input type="checkbox" id="BreathPacer" />
       <div class="fb-chk-body">
         <span class="fb-chk-title">Enable breathing cues</span>
         <span class="fb-chk-sub">Audible inhale/exhale tones at target rate</span>
@@ -438,14 +310,14 @@ const HRV = (() => {
     </label>
     <div class="fb-sub-row">
       <label class="vol-lbl">Rate</label>
-      <input type="range" id="hrvBreathRate" min="4" max="8" step="0.5" value="5.5" />
-      <span class="vol-val" id="hrvBreathRateVal">5.5 /min</span>
+      <input type="range" id="BreathRate" min="4" max="8" step="0.5" value="5.5" />
+      <span class="vol-val" id="BreathRateVal">5.5 /min</span>
     </div>
-    <div id="hrvBreathVis" style="display:none;flex-direction:column;align-items:center;gap:5px;margin-top:.5rem">
+    <div id="BreathVis" style="display:none;flex-direction:column;align-items:center;gap:5px;margin-top:.5rem">
       <div style="width:100%;height:6px;border-radius:3px;background:var(--border-subtle);overflow:hidden">
-        <div id="hrvBreathBar" style="height:100%;background:var(--accent);border-radius:3px;width:0%;transition:width linear"></div>
+        <div id="BreathBar" style="height:100%;background:var(--accent);border-radius:3px;width:0%;transition:width linear"></div>
       </div>
-      <span id="hrvBreathLabel" style="font-size:11px;color:var(--accent);font-family:var(--font-mono)">Inhale</span>
+      <span id="BreathLabel" style="font-size:11px;color:var(--accent);font-family:var(--font-mono)">Inhale</span>
     </div>
   </section>
 </div>`;
@@ -454,10 +326,10 @@ const HRV = (() => {
   let _breathTimer = null, _breathPhase = 'in', _breathStart = 0;
 
   function _startBreath() {
-    const rate = +(_el('hrvBreathRate')?.value || 5.5);
+    const rate = +(_el('BreathRate')?.value || 5.5);
     const cycle = 60/rate, durIn = cycle*0.4, durOut = cycle*0.6;
     _breathPhase='in'; _breathStart=Date.now();
-    _el('hrvBreathVis').style.display='flex';
+    _el('BreathVis').style.display='flex';
     Audio.playTone(440, 100, 0.04);
 
     _breathTimer = setInterval(() => {
@@ -472,16 +344,16 @@ const HRV = (() => {
         label = `Exhale (${Math.max(durOut-elapsed,0).toFixed(1)}s)`;
         if (elapsed>=durOut) { _breathPhase='in'; _breathStart=Date.now(); Audio.playTone(440,100,0.04); }
       }
-      const barEl = _el('hrvBreathBar');
+      const barEl = _el('BreathBar');
       if (barEl) barEl.style.width = bar.toFixed(1)+'%';
-      const lblEl = _el('hrvBreathLabel');
+      const lblEl = _el('BreathLabel');
       if (lblEl) lblEl.textContent = label;
     }, 80);
   }
 
   function _stopBreath() {
     clearInterval(_breathTimer);
-    const vis = _el('hrvBreathVis');
+    const vis = _el('BreathVis');
     if (vis) vis.style.display='none';
   }
 
@@ -492,28 +364,31 @@ const HRV = (() => {
     _mounted = true;
 
     document.getElementById('modePanel').innerHTML = TEMPLATE;
-    _initCharts();
+    Object.assign(charts, HrvLib.initCharts({
+      hrId:'HRChart', rrId:'RRChart', rmssdId:'RMSSDChart', maxPts: MAX_CHART_PTS
+    }));
+    //_initCharts();
     AudioPanel.init(() => sessionActive);
     // Register this mode's frame handler with the shared WsClient singleton.
     WsClient.setOnFrame(_onFrame);
 
-    _el('hrvBaselineBtn').addEventListener('click', () => {
+    _el('BaselineBtn').addEventListener('click', () => {
       if (!WsClient.isConnected()) { alert('Connect to the bridge first.'); return; }
       baselinePhase=true; rrBuffer=[];
-      _el('hrvStartBtn').disabled=true;
-      _el('hrvStatStatus').textContent='Calibrating…';
+      _el('startBtn').disabled=true;
+      _el('statStatus').textContent='Calibrating…';
     });
-    _el('hrvStartBtn').addEventListener('click', _startSession);
-    _el('hrvStopBtn').addEventListener('click',  _stopSession);
+    _el('startBtn').addEventListener('click', _startSession);
+    _el('stopBtn').addEventListener('click',  _stopSession);
 
     _el('beepInterval')?.addEventListener('input', e => {
       _el('beepIntervalVal').textContent = e.target.value+' s';
     });
-    _el('hrvBreathRate')?.addEventListener('input', e => {
-      _el('hrvBreathRateVal').textContent = (+e.target.value).toFixed(1)+' /min';
+    _el('BreathRate')?.addEventListener('input', e => {
+      _el('BreathRateVal').textContent = (+e.target.value).toFixed(1)+' /min';
     });
-    _el('hrvBreathPacer')?.addEventListener('change', () => {
-      _el('hrvBreathPacer').checked ? _startBreath() : _stopBreath();
+    _el('BreathPacer')?.addEventListener('change', () => {
+      _el('BreathPacer').checked ? _startBreath() : _stopBreath();
     });
   }
 

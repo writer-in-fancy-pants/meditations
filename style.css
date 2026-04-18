@@ -339,3 +339,28 @@ body {
   opacity: 1;
   transform: translateY(0);
 }
+
+  /* Charts - These rules add pan/zoom UX polish. */
+  .chart-wrapper,
+  .chart-container {
+    position: relative;
+    user-select: none;
+  }
+ 
+  .chart-wrapper canvas,
+  .chart-container canvas {
+    cursor: grab;
+  }
+ 
+  .chart-wrapper canvas:active,
+  .chart-container canvas:active {
+    cursor: grabbing;
+  }
+ 
+  /* Toolbar injected by attachChartControls() */
+  .chart-controls button:hover {
+     background: var(--bg-elevated); color: var(--text-primary); 
+  }
+  .chart-controls button:active {
+     background: var(--bg-elevated); color: var(--text-primary); 
+  }
