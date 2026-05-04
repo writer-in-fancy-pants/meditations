@@ -403,7 +403,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="localhost")
     p.add_argument("--port", type=int, default=8765)
-    p.add_argument("--ppg-ch", default=0, type=int, choices=[0,1,2],
+    p.add_argument("--ppg-ch", default=1, type=int, choices=[0,1,2],
                    help="PPG Channel to use. 0 : Ambient light, 1 : Infrared, 2: Red light")
     args = p.parse_args()
     PPG_CH_IDX = args.ppg_ch
