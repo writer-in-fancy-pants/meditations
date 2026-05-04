@@ -547,6 +547,8 @@ def battery_reader(loop):
 # ── WebSocket server ───────────────────────────────────────────────────────────
 
 async def _broadcast(message: str):
+    if recorder:
+        recorder.record(message)
     async with clients_lock:
         targets = list(clients)
     if targets:
@@ -564,8 +566,6 @@ async def handler(ws):
                       latest_fnirs_frame, latest_imu_frame]:
             if frame:
                 await ws.send(json.dumps(frame))
-                if recorder:
-                    recorder.record(frame)
         if latest_battery is not None:
             await ws.send(json.dumps(
                 {"type": "battery", "percent": latest_battery, "ts": time.time()}
