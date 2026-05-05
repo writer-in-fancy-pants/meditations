@@ -82,6 +82,7 @@ const AT = (() => {
       id: 'at',
       label: 'α/θ  —  Alpha / Theta  (Peniston)',
       description: 'Peniston protocol · θ/α crossover goal',
+      task: "A calm aware joyful experience - like smelling the fresh spring bloom.",
       goal: 'θ > α',
       datasets: [
         { label: 'α Alpha',   color: '#2db891', histKey: 'alpha',   axis: 'y'  },
@@ -105,6 +106,7 @@ const AT = (() => {
       id: 'smr',
       label: 'SMR  —  Sensorimotor Rhythm  (12–15 Hz)',
       description: 'SMR enhancement · calm focus goal',
+      task: "Ready but relaxed - like a cat is watching a bird, still and laser-focused.",
       goal: 'SMR ↑',
       datasets: [
         { label: 'SMR power', color: '#2db891', histKey: 'smrPower', axis: 'y' },
@@ -129,6 +131,7 @@ const AT = (() => {
       id: 'faa',
       label: 'FAA  —  Frontal Alpha Asymmetry',
       description: 'Approach motivation · positive valence goal',
+      task: 'Regulate anxiety and depression - notice how you blink, or twitch, or other repetitive movements.',
       goal: 'AF8α > AF7α',
       datasets: [
         { label: 'AF7 α',  color: '#e07050', histKey: 'af7Alpha',  axis: 'y'  },
@@ -151,6 +154,7 @@ const AT = (() => {
       id: 'beta_supp',
       label: 'β Suppression  —  Anxiety / Hyperarousal',
       description: 'Frontal beta suppression · calm goal',
+      task:"Keep steady, muscles relaxed. Improves motor control, reaction time - Parkinson's for example",
       goal: 'β ↓',
       datasets: [
         { label: 'AF7 β',     color: '#e07050', histKey: 'af7Beta',    axis: 'y'  },
@@ -176,6 +180,7 @@ const AT = (() => {
       id: 'gamma',
       label: 'γ Coherence  —  Frontal Gamma  (30–44 Hz)',
       description: 'Cognitive binding · working memory goal',
+      task:"Improve working memory and flexibility via mental recall games.",
       goal: 'γ ↑',
       datasets: [
         { label: 'AF7 γ',      color: '#e0b020', histKey: 'af7Gamma',     axis: 'y'  },
@@ -198,6 +203,7 @@ const AT = (() => {
       id: 'theta_enh',
       label: 'θ Enhancement  —  Deep Meditation / Creativity',
       description: 'Frontal theta enhancement · meditative depth goal',
+      task:"Cultivate deep concentration/flow - rely on thoughts, feelings, or mental focus to keep engaged.",
       goal: 'Fθ ↑',
       datasets: [
         { label: 'AF7 θ',    color: '#7c75e0', histKey: 'af7Theta',     axis: 'y'  },
@@ -222,6 +228,7 @@ const AT = (() => {
       id: 'composite',
       label: 'Composite NF Score  —  Wellbeing Index',
       description: 'Weighted blend of all protocols · 0–100 goal',
+      task:"",
       goal: 'Score ↑',
       datasets: [
         { label: 'NF Score',  color: '#2db891', histKey: 'nfScore',  axis: 'y'  },
@@ -321,6 +328,9 @@ const AT = (() => {
     <div class="stat"><span class="stat-lbl" id="statMetricLbl">θ/α ratio</span><span class="stat-val" id="statMetric">—</span></div>
     <div class="stat"><span class="stat-lbl">Source</span><span class="stat-val" id="statSource">local</span></div>
     <div class="stat"><span class="stat-lbl">Threshold</span><span class="stat-val" id="statThresh">—</span></div>
+  </div>
+  <div>
+  <span class="chart-sub" id="instructionsText">Instructions</span>
   </div>
 </section>
 
@@ -457,6 +467,7 @@ const AT = (() => {
     // Update chart header
     _el('RatioChartTitle') && (_el('RatioChartTitle').textContent = proto.label.split('—')[0].trim());
     _el('RatioChartSub')   && (_el('RatioChartSub').textContent   = proto.description);
+    _el('instructionsText') && (_el('instructionsText').textContent = proto.task);
 
     // Update badge
     const badge = _el('CrossoverBadge');
@@ -464,6 +475,7 @@ const AT = (() => {
 
     // Update stat label
     _el('statMetricLbl') && (_el('statMetricLbl').textContent = proto.datasets[2]?.label ?? proto.datasets[0].label);
+
 
     // Rebuild the ratio chart with new datasets
     _rebuildRatioChart(proto);
