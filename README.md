@@ -147,3 +147,4 @@ of the landing page repo (see `muse-tools/` README).
 * Add better (more meaningful) metrics to the comparator
 * Experiment with activity correlation as a metric
 * Parse saved record, make it compatible with the comparator
+* Fix Push hz issue in bridge

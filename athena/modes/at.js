@@ -29,7 +29,7 @@ const AT = (() => {
   const HISTORY_SECONDS = 120;
   const PUSH_HZ         = 4;
   const MAX_POINTS      = HISTORY_SECONDS * PUSH_HZ;
-  const BASELINE_SECS   = 10;
+  const BASELINE_SECS   = 60;
   const THRESH_DOWN_PCT = 0.40;
   const THRESH_STEP     = 0.05;
   const scaleReadings   = true;
@@ -43,7 +43,7 @@ const AT = (() => {
   ];
 
   const BAND_COLORS = {
-    delta: '#6b7db3', theta: '#7c75e0', alpha: '#2db891',
+    delta: '#2a45db', theta: '#7c75e0', alpha: '#2db891',
     beta:  '#e07050', gamma: '#e0b020',
   };
 
@@ -555,7 +555,7 @@ const AT = (() => {
           ChartUtils.makeDataset('γ Gamma', BAND_COLORS.gamma, empty()),
         ],
       },
-      options: ChartUtils.opts(cc, 'Power (µV²/Hz)', v => Math.round(v)),
+      options: ChartUtils.opts(cc, 'Power (µV²/Hz)', v => Math.round(v*100)/100),
     });
 
     // Build the ratio chart skeleton; _applyProtocol will populate it
@@ -638,7 +638,7 @@ const AT = (() => {
 
   function _onFrame(frame) {
     if (!_mounted || frame.type !== 'eeg') return;
-    console.log(frame)
+    //console.log(frame)
     _hideToast();
     if (sessionPaused) return;
 
@@ -711,11 +711,6 @@ const AT = (() => {
         charts.band.data.datasets[i].data  = [...(hist[b].map(v => v/scaleFactors[b]))];
       }
     );
-    // charts.band.data.datasets[0].data  = [...hist.delta];
-    // charts.band.data.datasets[1].data  = [...hist.theta];
-    // charts.band.data.datasets[2].data  = [...hist.alpha];
-    // charts.band.data.datasets[3].data  = [...hist.beta];
-    // charts.band.data.datasets[4].data  = [...hist.gamma];
     charts.band.update('none');
 
     // ── Protocol chart ────────────────────────────────────────────
