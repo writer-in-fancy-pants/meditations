@@ -118,21 +118,32 @@ of the landing page repo (see `muse-tools/` README).
 * Shared main landing page for meditations
 * Youtube integration for audio
 * localhost ws connection issue (browser specific) fixed via secure stream using ngrok (alternatively caddy)
+* Combine the bridge to provide both heart rate and EEG input at the same time
+* Feedback speed control with presets in (seconds, % of windows) : [(60, 0.6), (10,0.75), (5, 0.9), (2,0.99)]
 * Zoom, scroll in all charts
 * Refactor charting code, localizing repeated code blocks
+* Add an equivalent Muse Athena Live Neurofeedback
+* More Neurofeedback algorithms
+* Bridge support to record all sessions, frames, metrics
 
 ## TODO
+* Correct Frequency Band plot y-axis labels
+* Add marker / label to the chart
 * Fix heart rate calculation in ppg bridge, use ACC?
 * Show saveable / shareable summary modal at the end of the session
-* Combine the bridge to provide both heart rate and EEG input at the same time
-* Add a feedback speed control dial with presets in seconds, % of windows [(60, 0.6), (10,0.75), (5, 0.9), (2,0.99)]
+* Fix Athena PPG calculations - heart rate, RMSSD currently broken
+* Basic instructions for each Neurofeedback mechanism
+* Update How To for new neurofeedback methods
+* Unify muse interfaces once stable
 * Instructions at the bottom - start with loud setting, the music goes down with feedback
 * Variations of the project - standalone without monitoring
 * Pause the graph when session is stopped
 * Reset the graphs on recalibrating
 * Find a fix for streaming breaking (hardware or loop cli call)
 * Add a reminder/notification when connection is broken / no input
+* Auto reconnect OpenMuse, muselsl streams
 * Test audio upload with rain sounds, Weightless by Marconi Union
-* Add an equivalent Muse Athena Live Neurofeedback
 * Check maths on neurofeedback, ensure correct ratio is calculated
 * Add better (more meaningful) metrics to the comparator
+* Experiment with activity correlation as a metric
+* Parse saved record, make it compatible with the comparator

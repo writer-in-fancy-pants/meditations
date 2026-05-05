@@ -47,6 +47,8 @@ const AT = (() => {
     beta:  '#e07050', gamma: '#e0b020',
   };
 
+  const BANDS = ['delta', 'theta', 'alpha', 'beta', 'gamma'];
+
   /* ── Neurofeedback protocol definitions ─────────────────────────── */
   //
   // Each protocol defines:
@@ -644,7 +646,7 @@ const AT = (() => {
 
     // ── Raw per-channel values ────────────────────────────────────
     const ch = ch => bands[ch] ?? {};
-    const avg4 = b => (['tp9','af7','af8','tp10'].reduce((s,c)=>s+(bands[c]?.[b]??0),0)/4)/scaleFactors[b];
+    const avg4 = b => (['tp9','af7','af8','tp10'].reduce((s,c)=>s+(bands[c]?.[b]??0),0)/4);
 
     const delta = avg4('delta'), theta = avg4('theta'),
           alpha = avg4('alpha'), beta  = avg4('beta'), gamma = avg4('gamma');
@@ -704,11 +706,16 @@ const AT = (() => {
     // ── Band chart ────────────────────────────────────────────────
     const L = [...hist.labels];
     charts.band.data.labels            = L;
-    charts.band.data.datasets[0].data  = [...hist.delta];
-    charts.band.data.datasets[1].data  = [...hist.theta];
-    charts.band.data.datasets[2].data  = [...hist.alpha];
-    charts.band.data.datasets[3].data  = [...hist.beta];
-    charts.band.data.datasets[4].data  = [...hist.gamma];
+    BANDS.forEach(
+      (b,i) => {
+        charts.band.data.datasets[i].data  = [...(hist[b].map(v => v/scaleFactors[b]))];
+      }
+    );
+    // charts.band.data.datasets[0].data  = [...hist.delta];
+    // charts.band.data.datasets[1].data  = [...hist.theta];
+    // charts.band.data.datasets[2].data  = [...hist.alpha];
+    // charts.band.data.datasets[3].data  = [...hist.beta];
+    // charts.band.data.datasets[4].data  = [...hist.gamma];
     charts.band.update('none');
 
     // ── Protocol chart ────────────────────────────────────────────
@@ -832,14 +839,12 @@ const AT = (() => {
 
     // Calculate scaling factors for hist, scale charts
     if (scaleReadings === true) {
-      ['delta', 'theta', 'alpha', 'beta', 'gamma'].map(
-        b => {
-          // In case scale factors are not 1
-          hist[b] = hist[b].map(v => (v*scaleFactors[b]));
+      BANDS.forEach(
+        (b, i) => {
           // Set scale factors  to average / median of all hist readings per band in calibration
           scaleFactors[b] = hist[b].reduce((s, v) => s + v, 0) / hist[b].length;
           // rescale existing hist values
-          hist[b] = hist[b].map(v => (v/scaleFactors[b]));
+          charts.band.data.datasets[i].data = hist[b].map(v => (v/scaleFactors[b]));
           console.log("Scaling", b, scaleFactors[b]);
         }
       )
