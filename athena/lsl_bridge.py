@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 bridge.py — OpenMuse / MNE-LSL → WebSocket bridge  (Muse S Athena edition)
+OpenMuse fork - https://github.com/writer-in-fancy-pants/OpenMuse.git
 
 Reads all LSL streams produced by OpenMuse (EEG, PPG/fNIRS optics,
 ACC/GYRO, Battery) and pushes JSON frames to every connected WebSocket client.
@@ -15,7 +16,7 @@ Install:
   pip install mne-lsl websockets neurokit2 numpy scipy
 
 Run:
-  OpenMuse stream --address <address from 'OpenMuse find'> --preset p1041
+  OpenMuse stream --address <address from 'OpenMuse find'> --auto-reconnect
   python lsl_bridge.py [--host localhost] [--port 8765]
 """
 

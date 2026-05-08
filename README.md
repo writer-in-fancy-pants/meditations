@@ -125,14 +125,16 @@ of the landing page repo (see `muse-tools/` README).
 * Add an equivalent Muse Athena Live Neurofeedback
 * More Neurofeedback algorithms
 * Bridge support to record all sessions, frames, metrics
+* Basic instructions for each Neurofeedback mechanism
 
 ## TODO
+* Run on Android
+* OpenMuse android support
 * Correct Frequency Band plot y-axis labels
 * Add marker / label to the chart
 * Fix heart rate calculation in ppg bridge, use ACC?
 * Show saveable / shareable summary modal at the end of the session
 * Fix Athena PPG calculations - heart rate, RMSSD currently broken
-* Basic instructions for each Neurofeedback mechanism
 * Update How To for new neurofeedback methods
 * Unify muse interfaces once stable
 * Instructions at the bottom - start with loud setting, the music goes down with feedback
