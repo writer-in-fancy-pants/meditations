@@ -141,6 +141,8 @@ engine = FeedbackEngine(pacer_bpm=5.5)
 
 # record frames
 recorder = None
+eeg_recorder = None
+ppg_recorder = None
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -183,9 +185,11 @@ def _pull_chunk(inlet):
     """Normalise pull_chunk across mne-lsl / pylsl."""
     if _MNE_LSL:
         samples, ts = inlet.pull_chunk(timeout=0.02)
-        return (samples.T.tolist() if samples is not None and len(samples) else []), ts
+        out = (samples.T.tolist() if samples is not None and len(samples) else []), ts
     else:
-        return inlet.pull_chunk(timeout=0.02, max_samples=32)
+        out = inlet.pull_chunk(timeout=0.02, max_samples=32)
+    
+    return out
 
 # ── DSP — EEG ─────────────────────────────────────────────────────────────────
 
@@ -446,13 +450,24 @@ def eeg_reader(loop):
         return
     acc = 0
     while True:
-        chunk, _ = _pull_chunk(inlet)
+        chunk, timestamps = _pull_chunk(inlet)
         if not chunk:
             continue
-        for sample in chunk:
+        print(len(timestamps), len(chunk[0]))
+        for j, sample in enumerate(chunk):
             for i in range(min(N_EEG_CH, len(sample))):
                 eeg_buffers[i].append(sample[i])
             acc += 1
+        if eeg_recorder:
+            arr = np.array2string(
+                    np.column_stack([timestamps]+chunk), 
+                    separator=',',
+                    max_line_width=10000,
+                    threshold=1000000,
+                    floatmode='unique'
+                    ).strip('[]').replace('],\n [', '\n')
+            #print(arr)
+            eeg_recorder.record(f'{arr}')
         if acc >= STEP_SAMPLES:
             acc = 0
             frame = compute_eeg_frame()
@@ -577,6 +592,8 @@ async def handler(ws):
             clients.discard(ws)
         if recorder:
             recorder.stop()
+        if eeg_recorder:
+            eeg_recorder.stop()
         log.info(f"Client disconnected: {ws.remote_address}  total={len(clients)}")
 
 
@@ -596,6 +613,10 @@ async def main(host: str, port: int):
     
     if recorder:
         recorder.start()
+        
+    if eeg_recorder:
+        eeg_recorder.start()
+        eeg_recorder.record('timestamps,TP9,AF7,AF8,TP10,Aux1,Aux2,Aux3,Aux4')
 
     log.info(f"WebSocket server listening on ws://{host}:{port}")
     async with websockets.serve(handler, host, port):
@@ -613,4 +634,5 @@ if __name__ == "__main__":
     
     if args.record_path != '':
         recorder = FrameRecorder(path=args.record_path)
+        eeg_recorder = FrameRecorder(path=f'{args.record_path.rsplit('.',1)[0]}_eeg.csv')
     asyncio.run(main(args.host, args.port))

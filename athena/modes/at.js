@@ -342,7 +342,7 @@ const AT = (() => {
     </div>
     <div class="chart-wrap" style="height:220px"><canvas id="BandChart"></canvas></div>
     <div class="band-legend">
-      <span class="bl-item" style="--c:#6b7db3">δ Delta</span>
+      <span class="bl-item" style="--c:#2a45db">δ Delta</span>
       <span class="bl-item" style="--c:#7c75e0">θ Theta</span>
       <span class="bl-item" style="--c:#2db891">α Alpha</span>
       <span class="bl-item" style="--c:#e07050">β Beta</span>
