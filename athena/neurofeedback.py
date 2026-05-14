@@ -708,7 +708,7 @@ class FeedbackEngine:
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI — WebSocket consumer
 # ═════════════════════════════════════════════════════════════════════════════
-def get_feedback(engine, frame, last_out, verbose=True, delay=0.25):
+def get_feedback(engine, frame, last_out, verbose=True, delay=0.4):
     engine.ingest(frame)
     # Print a full snapshot ~4 Hz regardless of frame type
     now = time.time()

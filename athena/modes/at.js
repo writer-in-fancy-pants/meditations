@@ -224,26 +224,79 @@ const AT = (() => {
       },
       badgeLabel: 'Deep θ',
     },
+    // {
+    //   id: 'composite',
+    //   label: 'Composite NF Score  —  Wellbeing Index',
+    //   description: 'Weighted blend of all protocols · 0–100 goal',
+    //   task:"",
+    //   goal: 'Score ↑',
+    //   datasets: [
+    //     { label: 'NF Score',  color: '#2db891', histKey: 'nfScore',  axis: 'y'  },
+    //     { label: 'Threshold', color: 'rgba(255,140,60,0.55)', histKey: '_thresh', axis: 'y',
+    //       dash: true },
+    //   ],
+    //   threshAxis: 'y', yLabel: 'Composite score (0–100)', y2Label: null,
+    //   threshMin: 0, threshMax: 100, threshStep: 1, threshDefault: 50,
+    //   snapshotKey: 'nf_score',
+    //   baselineMetric: () => 50,
+    //   direction: 'up',
+    //   badgeFn: (hist, thresh) => {
+    //     const v = hist.nfScore.slice(-1)[0]; return v != null && v > thresh;
+    //   },
+    //   badgeLabel: 'Above target',
+    // },
     {
-      id: 'composite',
-      label: 'Composite NF Score  —  Wellbeing Index',
-      description: 'Weighted blend of all protocols · 0–100 goal',
-      task:"",
-      goal: 'Score ↑',
+      id: 'vipassana',
+      label: 'Vipassana - Focused body scanning',
+      description: 'Awareness · Impermanence · Resolve',
+      task: "From top to bottom, from bottom to top. Focus on each part, wait until you notice a sensation, then move on to next part. Try to not move at all. Don't get attached to thoughts and sensations.",
+      goal: 'Awareness of Impermanence',
       datasets: [
-        { label: 'NF Score',  color: '#2db891', histKey: 'nfScore',  axis: 'y'  },
-        { label: 'Threshold', color: 'rgba(255,140,60,0.55)', histKey: '_thresh', axis: 'y',
+        { label: 'Awareness α', color: '#2db891', histKey: 'alpha', axis: 'y' },
+        { label: 'Meditation score', color: '#7c75e0', histKey: 'vipScore', axis: 'y2' },
+        { label: 'Threshold', color: 'rgba(255,140,60,0.55)', histKey: '_thresh', axis: 'y2',
           dash: true },
       ],
-      threshAxis: 'y', yLabel: 'Composite score (0–100)', y2Label: null,
-      threshMin: 0, threshMax: 100, threshStep: 1, threshDefault: 50,
-      snapshotKey: 'nf_score',
-      baselineMetric: () => 50,
+      threshAxis: 'y2', yLabel: 'power (µV²/Hz)', y2Label: 'Normalised score',
+      threshMin: 0.0, threshMax: 1.0, threshStep: 0.01, threshDefault: 0.5,
+      snapshotKey: 'vip_score',
+      baselineMetric: (metrics, bands) => {
+        const avg4 = b => ['tp9','af7','af8','tp10'].reduce((s,ch)=>s+(bands[ch]?.[b]??0),0)/4;
+        // Metric 1 : Active attention vs all other bands
+        return (avg4('alpha')/(avg4('delta')+avg4('theta')+avg4('beta')+avg4('gamma')) + 1e-9);
+      },
       direction: 'up',
       badgeFn: (hist, thresh) => {
-        const v = hist.nfScore.slice(-1)[0]; return v != null && v > thresh;
+        const v = hist.smrScore.slice(-1)[0]; return v != null && v > thresh;
       },
-      badgeLabel: 'Above target',
+      badgeLabel: 'Anijja',
+    },
+        {
+      id: 'EMDR',
+      label: 'EMDR  —  Processing memories with cognitive stimulation',
+      description: 'Problem oriented · diffused attention',
+      task: 'Focus on the moving sound / light. Daydream on a sticky / bothersome thought or situation. Notice the train of thoughts on the beep.',
+      goal: 'Background connections',
+      datasets: [
+        { label: 'Awareness α',  color: '#e07050', histKey: 'alpha',  axis: 'y'  },
+        { label: 'Stress β+γ',  color: '#2db891', histKey: 'stress',  axis: 'y'  },
+        { label: 'EMDR score',    color: '#7c75e0', histKey: 'emdrScore',  axis: 'y2' },
+        { label: 'Threshold', color: 'rgba(255,140,60,0.55)', histKey: '_thresh', axis: 'y2',
+          dash: true },
+      ],
+      threshAxis: 'y2', yLabel: 'α power (µV²/Hz)', y2Label: 'FAA  (ln ratio)',
+      threshMin: -1.0, threshMax: 1.0, threshStep: 0.05, threshDefault: 0.0,
+      snapshotKey: 'emdr_score',
+      baselineMetric: (metrics, bands) => {
+        const avg4 = b => ['tp9','af7','af8','tp10'].reduce((s,ch)=>s+(bands[ch]?.[b]??0),0)/4;
+        // Metric 1 : Increase alpha (but not too much), higher delta vs all other bands
+        return (avg4('alpha') + avg4('theta'))/(avg4('alpha')+avg4('delta')+avg4('beta')+avg4('gamma') + 1e-9);
+      },
+      direction: 'up',
+      badgeFn: (hist, thresh) => {
+        const v = hist.faa.slice(-1)[0]; return v != null && v > thresh;
+      },
+      badgeLabel: 'Positive',
     },
   ];
 
@@ -288,6 +341,8 @@ const AT = (() => {
     betaSupp:    [],
     frontalGamma:[], af7Gamma:   [], af8Gamma: [],
     thetaScore:  [],
+    vipScore:    [],
+    emdrScore:   [], stress:     [],
     nfScore:     [],
   };
 
@@ -614,6 +669,9 @@ const AT = (() => {
       beta_suppression:  'betaSupp',
       gamma_coherence:   'frontalGamma',
       frontal_theta:     'thetaScore',
+      vipScore:          'vipScore',
+      emdrScore:         'emdrScore',
+      stress:            'stress',
       nf_score:          'nfScore',
     };
 
@@ -814,7 +872,7 @@ const AT = (() => {
       const proto = _proto(activeProtoId);
       const bv = proto?.baselineMetric(metrics, bands) ?? atRatio;
       baselineBuffer.push(bv);
-      const PUSH_HZ = 0.5;
+      //const PUSH_HZ = 0.5;
       const pct = Math.min(baselineBuffer.length / (BASELINE_SECS * PUSH_HZ), 1);
       _el('statStatus').textContent = `Calibrating… ${Math.round(pct * 100)}%`;
       if (baselineBuffer.length >= BASELINE_SECS * PUSH_HZ) _finishBaseline();

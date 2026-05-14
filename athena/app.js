@@ -12,7 +12,7 @@
 
 /* ── Mode registry ──────────────────────────────────────── */
 
-const MODES = { at: AT, hrv: HRV, howto: HowTo };
+const MODES = { at: AT, hrv: HRV, howto: HowTo};//, meditation:Meditation };
 let activeMode     = null;
 let activeModeKey  = null;
 

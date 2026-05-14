@@ -31,6 +31,7 @@ from collections import deque
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 try:
     from mne_lsl.lsl import StreamInlet, resolve_streams
@@ -132,6 +133,7 @@ latest_ppg_frame    = None
 latest_fnirs_frame  = None
 latest_imu_frame    = None
 latest_battery      = None
+latest_marker       = None  # Separate marker stream to mark events on the EEG timeline
 
 clients      = set()
 clients_lock = asyncio.Lock()
@@ -184,10 +186,10 @@ def _resolve(stream_name: str, stream_type: str, timeout: float = 10):
 def _pull_chunk(inlet):
     """Normalise pull_chunk across mne-lsl / pylsl."""
     if _MNE_LSL:
-        samples, ts = inlet.pull_chunk(timeout=0.02)
+        samples, ts = inlet.pull_chunk(timeout=0.001)
         out = (samples.T.tolist() if samples is not None and len(samples) else []), ts
     else:
-        out = inlet.pull_chunk(timeout=0.02, max_samples=32)
+        out = inlet.pull_chunk(timeout=0.001, max_samples=32)
     
     return out
 
@@ -229,6 +231,130 @@ def compute_bands(signal, fs=EEG_FS):
         return {b: 0.0 for b in BANDS}
     return {b: band_power(psd, freqs, lo, hi) for b, (lo, hi) in BANDS.items()}
 
+def calculate_channel_to_channel_correlations(data, window_size_s=1.0, step_size_s=0.5):
+    """
+    Calculates the mean pairwise correlation between channels for each frequency band
+    across sliding windows.
+    
+    Parameters:
+    -----------
+    data : np.ndarray
+        Shape (n_channels, n_samples, n_bands).
+    window_size_s : float
+        Window size in seconds.
+    step_size_s : float
+        Step size in seconds.
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Columns: ['Band', 'Channel1', 'Channel2', 'Mean_Correlation']
+    """
+    window_samples = int(window_size_s * EEG_FS) # WIN_SAMPLES
+    step_samples = int(step_size_s * EEG_FS) # STEP_SAMPLES
+    
+    results = []
+    
+    # Iterate over each band
+    for band_name in (BANDS):
+        # Data slice for this band: (n_channels, n_samples)
+        # Transpose for np.corrcoef which expects (n_vars, n_observations)
+        band_data = data
+        
+        # Generator for window indices
+        window_indices = range(0, band_data.shape[1] - window_samples + 1, step_samples)
+        
+        # Accumulator for correlation matrices
+        corr_sum = np.zeros((len(EEG_CHANNELS), len(EEG_CHANNELS)))
+        n_windows = 0
+        
+        for start_idx in window_indices:
+            end_idx = start_idx + window_samples
+            window_slice = band_data[:, start_idx:end_idx]
+            
+            # Compute correlation matrix for the window
+            corr_mat = np.corrcoef(window_slice)
+            corr_sum += corr_mat
+            n_windows += 1
+            
+        # Average correlation
+        if n_windows > 0:
+            mean_corr_mat = corr_sum / n_windows
+            
+            # Extract pairwise correlations
+            for i, ch1 in enumerate(EEG_CHANNELS):
+                for j, ch2 in enumerate(EEG_CHANNELS):
+                    if i < j:
+                        results.append({
+                            'Band': band_name,
+                            'Channel1': ch1,
+                            'Channel2': ch2,
+                            'Mean_Correlation': mean_corr_mat[i, j]
+                        })
+                        
+    return pd.DataFrame(results)
+
+def calculate_band_to_band_correlations(data, window_size_s=1.0, step_size_s=0.5):
+    """
+    Calculates the mean pairwise correlation between frequency bands for each channel
+    across sliding windows.
+    
+    Parameters:
+    -----------
+    data : np.ndarray
+        Shape (n_channels, n_samples, n_bands).
+    fs : float
+        Sampling frequency.
+    window_size_s : float
+        Window size in seconds.
+    step_size_s : float
+        Step size in seconds.
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Columns: ['Channel', 'Band1', 'Band2', 'Mean_Correlation']
+    """
+    window_samples = int(window_size_s * EEG_FS)
+    step_samples = int(step_size_s * EEG_FS)
+    
+    results = []
+    
+    # Iterate over each channel
+    for ch_name in data.keys():
+        # Data slice for this channel: dict of channels->dict of bands
+        # Already in correct shape for np.corrcoef: (n_vars, n_observations) -> (bands, time)
+        # So we need data[ch, :, :] which is (time, bands), then transpose to (bands, time)
+        channel_data = data[ch_name]
+        
+        window_indices = range(0, channel_data.shape[1] - window_samples + 1, step_samples)
+        
+        corr_sum = np.zeros((len(BANDS), len(BANDS)))
+        n_windows = 0
+        
+        for start_idx in window_indices:
+            end_idx = start_idx + window_samples
+            window_slice = channel_data[:, start_idx:end_idx]
+            
+            corr_mat = np.corrcoef(window_slice)
+            corr_sum += corr_mat
+            n_windows += 1
+            
+        if n_windows > 0:
+            mean_corr_mat = corr_sum / n_windows
+            
+            for i, b1 in enumerate(BANDS):
+                for j, b2 in enumerate(BANDS):
+                    if i < j:
+                        results.append({
+                            'Channel': ch_name,
+                            'Band1': b1,
+                            'Band2': b2,
+                            'Mean_Correlation': mean_corr_mat[i, j]
+                        })
+                        
+    return pd.DataFrame(results)
+
 def compute_eeg_frame():
     if len(eeg_buffers[0]) < WIN_SAMPLES:
         return None
@@ -247,7 +373,7 @@ def compute_eeg_frame():
         bp["aux1"]["beta"], bp["aux2"]["beta"],
         bp["aux3"]["beta"], bp["aux4"]["beta"],
     )
-
+    
     metrics = {
         "focus":      avg(af7["beta"],  af8["beta"]) /
                       (avg(af7["alpha"], af8["alpha"]) + avg(af7["theta"], af8["theta"]) + eps),
@@ -264,12 +390,26 @@ def compute_eeg_frame():
                       (avg(af7["alpha"], af8["alpha"], tp9["alpha"], tp10["alpha"]) + eps),
         # Frontal alpha asymmetry: ln(AF8α) − ln(AF7α)  (approach vs withdrawal)
         "faa":        math.log(max(af8["alpha"], 1e-12)) - math.log(max(af7["alpha"], 1e-12)),
+        # Custom meditation scores
+        "vipScore": avg(tp9["alpha"], tp10["alpha"])/
+                        (avg(af7["delta"], af8["delta"], tp9["delta"], tp10["delta"],
+                           af7["beta"], af8["beta"], tp9["beta"], tp10["beta"],
+                           af7["gamma"], af8["gamma"], tp9["gamma"], tp10["gamma"]) + eps),
+        "emdrScore": avg(af7["theta"], af8["theta"], tp9["theta"], tp10["theta"],
+                         af7['alpha'], af8['alpha']) /
+                      (avg(af7["alpha"], af8["alpha"], tp9["alpha"], tp10["alpha"],
+                           af7["delta"], af8["delta"], tp9["delta"], tp10["delta"],
+                           af7["beta"], af8["beta"], tp9["beta"], tp10["beta"],
+                           af7["gamma"], af8["gamma"], tp9["gamma"], tp10["gamma"]) + eps),
         # Mu rhythm (sensorimotor alpha, 8-12 Hz) from Aux electrodes if worn over C3/C4
         "mu_suppression_proxy": aux_beta_avg /
                                 (avg(bp["aux1"]["alpha"], bp["aux2"]["alpha"],
                                      bp["aux3"]["alpha"], bp["aux4"]["alpha"]) + eps),
         # Gamma coherence proxy (memory/binding)
         "frontal_gamma":        avg(af7["gamma"], af8["gamma"]),
+        # # correlation metrics
+        # "band_correlations" :   calculate_band_to_band_correlations(bp),
+        # "channel_correlations": calculate_channel_to_channel_correlations(bp),
     }
 
     return {"type": "eeg", "bands": bp, "metrics": metrics, "ts": 0}
@@ -453,11 +593,13 @@ def eeg_reader(loop):
         chunk, timestamps = _pull_chunk(inlet)
         if not chunk:
             continue
-        print(len(timestamps), len(chunk[0]))
-        for j, sample in enumerate(chunk):
-            for i in range(min(N_EEG_CH, len(sample))):
-                eeg_buffers[i].append(sample[i])
-            acc += 1
+        
+        for channel in chunk:
+            for i in range(min(N_EEG_CH, len(channel))):
+                eeg_buffers[i].append(channel[i])
+                    
+        acc += len(timestamps)
+                    
         if eeg_recorder:
             arr = np.array2string(
                     np.column_stack([timestamps]+chunk), 
@@ -475,15 +617,16 @@ def eeg_reader(loop):
                 frame["ts"] = time.time()
                 latest_eeg_frame = frame
                 # Compute Various Neurofeedback
-                snap = get_feedback(engine, frame, latest_eeg_frame['ts'])
-                if snap:
-                    frame['snapshot'] = snap
+                # snap = get_feedback(engine, frame, latest_eeg_frame['ts'])
+                # if snap:
+                #     frame['snapshot'] = snap
+                # print(time.time(), acc, len(chunk[0]))
                 asyncio.run_coroutine_threadsafe(_broadcast(json.dumps(frame)), loop)
 
 
 def optics_reader(loop):
     """
-    Reads the Muse_ACCGYRO-named optics stream from OpenMuse.
+    Reads the Muse-OPTICS-named optics stream from OpenMuse.
     OpenMuse names the optics stream 'Muse_Optics'.
     """
     global latest_ppg_frame, latest_fnirs_frame
@@ -502,6 +645,16 @@ def optics_reader(loop):
                 optics_buffers.append(timestamps)
             ppg_acc   += 1
             fnirs_acc += 1
+            
+        if ppg_recorder:
+            arr = np.array2string(
+                    np.column_stack([timestamps]+chunk), 
+                    separator=',',
+                    max_line_width=10000,
+                    threshold=1000000,
+                    floatmode='unique'
+                    ).strip('[]').replace('],\n [', '\n')
+            ppg_recorder.record(f'{arr}')
 
         if ppg_acc >= PPG_STEP_SAMPLES:
             ppg_acc = 0
@@ -571,6 +724,82 @@ async def _broadcast(message: str):
         await asyncio.gather(*[c.send(message) for c in targets],
                              return_exceptions=True)
 
+def recording():
+    if recorder:
+        recorder.start()
+        
+    if eeg_recorder:
+        eeg_recorder.start()
+        eeg_recorder.record('timestamps,TP9,AF7,AF8,TP10,Aux1,Aux2,Aux3,Aux4')
+
+    if ppg_recorder:
+        ppg_recorder.start()
+        ppg_recorder.record('timestamps,<channel-names>')
+    
+def stop_recording():
+    if recorder:
+        recorder.stop()
+    if eeg_recorder:
+        eeg_recorder.stop()
+    if ppg_recorder:
+        ppg_recorder.stop()
+
+async def _handle_inbound(ws, message: str):
+    """
+    Process a message received FROM a WebSocket client (e.g. the VLC plugin).
+    Only 'marker' type frames are acted on; everything else is ignored.
+    """
+    try:
+        print(message)
+        data = json.loads(message)
+    except json.JSONDecodeError:
+        log.warning("Received non-JSON message from client: %s", message)
+        return
+
+    if data.get("type") != "marker":
+        return
+
+    # Normalise: ensure ts is present and is a float
+    if "ts" not in data:
+        data["ts"] = time.time()
+
+    log.info("VLC marker: event=%s  media=%s  vlc_time_ms=%s",
+             data.get("event"), data.get("media"), data.get("vlc_time_ms"))
+
+    serialised = json.dumps(data)
+
+    # Write to the main JSON-lines recorder (same file as EEG/PPG frames)
+    # if recorder:
+    #    recorder.record(serialised)
+
+    # Broadcast back to all other clients so dashboards see the marker too
+    await _broadcast(serialised)
+
+
+async def _tcp_marker_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """
+    Accepts plain TCP connections from VLC (or any non-WS client).
+    Reads newline-delimited JSON lines and passes each to _handle_inbound.
+    """
+    peer = writer.get_extra_info("peername")
+    log.info(f"TCP marker client connected: {peer}")
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:          # EOF — client disconnected
+                break
+            message = line.decode("utf-8").strip()
+            if message:
+                await _handle_inbound(None, message)
+    except asyncio.IncompleteReadError:
+        pass
+    except Exception as e:
+        log.error("TCP marker handler error: %s", e)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        log.info(f"TCP marker client disconnected: {peer}")
+
 
 async def handler(ws):
     async with clients_lock:
@@ -586,40 +815,41 @@ async def handler(ws):
             await ws.send(json.dumps(
                 {"type": "battery", "percent": latest_battery, "ts": time.time()}
             ))
+        #async for message in ws:
+        #    await _handle_inbound(ws, message)
         await ws.wait_closed()
     finally:
         async with clients_lock:
             clients.discard(ws)
-        if recorder:
-            recorder.stop()
-        if eeg_recorder:
-            eeg_recorder.stop()
+        stop_recording()
         log.info(f"Client disconnected: {ws.remote_address}  total={len(clients)}")
 
 
 async def main(host: str, port: int):
     loop = asyncio.get_running_loop()
 
+    # The endpoints require these streams
     processes = [
         ("EEG reader",     eeg_reader),
         ("Optics reader",  optics_reader),
         ("IMU reader",     imu_reader),
         ("Battery reader", battery_reader),
+        #('Markers',        marker_incoming),
     ]
     
     for name, fn in processes:
         t = threading.Thread(target=fn, args=(loop,), daemon=True, name=name)
         t.start()
     
-    if recorder:
-        recorder.start()
-        
-    if eeg_recorder:
-        eeg_recorder.start()
-        eeg_recorder.record('timestamps,TP9,AF7,AF8,TP10,Aux1,Aux2,Aux3,Aux4')
+    recording()
 
+    # Plain TCP marker server (for VLC / non-WS clients)
+    tcp_server = await asyncio.start_server(
+        _tcp_marker_handler, host, args.tcp_port
+    )
+    log.info(f"TCP marker server listening on {host}:{args.tcp_port}")
     log.info(f"WebSocket server listening on ws://{host}:{port}")
-    async with websockets.serve(handler, host, port):
+    async with websockets.serve(handler, host, port), tcp_server:
         await asyncio.Future()  # run forever
 
 
@@ -629,10 +859,12 @@ if __name__ == "__main__":
     )
     p.add_argument("--host", default="localhost")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--tcp-port", type=int, default=8766)
     p.add_argument("--record-path", type=str, default="", help="recording location")
     args = p.parse_args()
     
     if args.record_path != '':
         recorder = FrameRecorder(path=args.record_path)
-        eeg_recorder = FrameRecorder(path=f'{args.record_path.rsplit('.',1)[0]}_eeg.csv')
+        eeg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_eeg.csv")
+        ppg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_ppg.csv")
     asyncio.run(main(args.host, args.port))
