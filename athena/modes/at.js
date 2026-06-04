@@ -49,6 +49,12 @@ const AT = (() => {
 
   const BANDS = ['delta', 'theta', 'alpha', 'beta', 'gamma'];
 
+  const HIST_KEYS = [
+    'af7Alpha','af8Alpha','af7Theta','af8Theta','af7Beta','af8Beta',
+       'af7Gamma','af8Gamma','smrPower','smrScore','faa','betaSupp',
+       'frontalGamma','thetaScore','nfScore',
+      'lle_tp9',  'lle_af7', 'lle_af8','lle_tp10'
+      ];
   /* ── Neurofeedback protocol definitions ─────────────────────────── */
   //
   // Each protocol defines:
@@ -224,27 +230,6 @@ const AT = (() => {
       },
       badgeLabel: 'Deep θ',
     },
-    // {
-    //   id: 'composite',
-    //   label: 'Composite NF Score  —  Wellbeing Index',
-    //   description: 'Weighted blend of all protocols · 0–100 goal',
-    //   task:"",
-    //   goal: 'Score ↑',
-    //   datasets: [
-    //     { label: 'NF Score',  color: '#2db891', histKey: 'nfScore',  axis: 'y'  },
-    //     { label: 'Threshold', color: 'rgba(255,140,60,0.55)', histKey: '_thresh', axis: 'y',
-    //       dash: true },
-    //   ],
-    //   threshAxis: 'y', yLabel: 'Composite score (0–100)', y2Label: null,
-    //   threshMin: 0, threshMax: 100, threshStep: 1, threshDefault: 50,
-    //   snapshotKey: 'nf_score',
-    //   baselineMetric: () => 50,
-    //   direction: 'up',
-    //   badgeFn: (hist, thresh) => {
-    //     const v = hist.nfScore.slice(-1)[0]; return v != null && v > thresh;
-    //   },
-    //   badgeLabel: 'Above target',
-    // },
     {
       id: 'vipassana',
       label: 'Vipassana - Focused body scanning',
@@ -271,7 +256,7 @@ const AT = (() => {
       },
       badgeLabel: 'Anijja',
     },
-        {
+    {
       id: 'EMDR',
       label: 'EMDR  —  Processing memories with cognitive stimulation',
       description: 'Problem oriented · diffused attention',
@@ -298,9 +283,39 @@ const AT = (() => {
       },
       badgeLabel: 'Positive',
     },
+    {
+      id : "LLE",
+      label: "Largest Lyapunov Exponent",
+      // Is it possible to not change instructions?
+      threshAxis: 'y2', yLabel: 'Power (µV²/Hz)', y2Label: 'lle',
+      snapshotKey: 'lle',
+      direction: 'up',
+      //continue: true,
+      task: "LLE.",
+      goal: 'LLE',
+      datasets: [
+        { label: 'TP9',   color: '#230796', histKey: 'lle_tp9',   axis: 'y'  },
+        { label: 'AF7',   color: '#7c75e0', histKey: 'lle_af7',   axis: 'y' },
+        { label: 'AF8', color: '#e07050', histKey: 'lle_af8', axis: 'y'},
+        { label: 'TP10', color: '#f14313', histKey: 'lle_tp10', axis: 'y' },
+      ],
+      threshAxis: 'y2', yLabel: '', y2Label: 'LLE',
+      threshMin: -0.2, threshMax: 3.0, threshStep: 0.05, threshDefault: 0.0,
+      snapshotKey: 'alpha_theta_ratio',
+      baselineMetric: (metrics) => metrics.at_ratio ?? 1.0,
+      direction: 'up',
+      badgeFn: (hist) => {
+        const t = hist.theta.slice(-1)[0]; const a = hist.alpha.slice(-1)[0];
+        return t != null && a != null && t > a;
+      },
+      badgeLabel: 'θ > α'
+    }
   ];
 
   // Look up a protocol by id
+  // Some protocols are only for graphs, so allow previous protocol keys to remain if not provided
+  // const _proto = id => ({
+  //   ...(_proto?_proto:{}), ...(PROTOCOLS.find(p => p.id === id))})
   const _proto = id => PROTOCOLS.find(p => p.id === id);
 
   /* ── Mutable adaptation speed ────────────────────────────────────── */
@@ -344,6 +359,10 @@ const AT = (() => {
     vipScore:    [],
     emdrScore:   [], stress:     [],
     nfScore:     [],
+    lle_tp9: [],
+    lle_af7: [],
+    lle_af8: [],
+    lle_tp10:[]
   };
 
   let scaleFactors = {'delta':1.0, 'theta':1.0, 'alpha':1.0, 'gamma':1.0, 'beta':1.0}
@@ -731,6 +750,8 @@ const AT = (() => {
     const af7Gamma    = ch('af7').gamma   ?? 0;
     const af8Gamma    = ch('af8').gamma   ?? 0;
 
+
+
     // ── Local metric fallbacks (used when no snapshot present) ────
     const atRatio     = metrics.at_ratio      ?? (theta / (alpha + 1e-12));
     const faa         = metrics.faa           ?? (Math.log(af8Alpha + 1e-12) - Math.log(af7Alpha + 1e-12));
@@ -768,6 +789,12 @@ const AT = (() => {
     ChartUtils.rollingPush(hist.frontalGamma,frontalGamma,P);
     ChartUtils.rollingPush(hist.thetaScore,  thetaScore,  P);
     ChartUtils.rollingPush(hist.nfScore,     nfScore,     P);
+    //console.log(metrics.lle)
+    // // make it a loop once I can address the variable by channel name
+    ChartUtils.rollingPush(hist.lle_tp9,     metrics.lle['tp9'],     P);
+    ChartUtils.rollingPush(hist.lle_af7,     metrics.lle['af7'],     P);
+    ChartUtils.rollingPush(hist.lle_af8,     metrics.lle['af8'],     P);
+    ChartUtils.rollingPush(hist.lle_tp10,    metrics.lle['tp10'],     P);
 
     // ── Parse snapshot (overwrites last-pushed local values) ──────
     const hasSnap = frame.snapshot ? _parseSnapshot(frame.snapshot, hist) : false;
@@ -1041,9 +1068,7 @@ const AT = (() => {
       hist.labels=[]; hist.delta=[]; hist.theta=[]; hist.alpha=[];
       hist.beta=[]; hist.gamma=[]; hist.atRatio=[]; hist.t0=null;
       // Also clear per-protocol hists
-      ['af7Alpha','af8Alpha','af7Theta','af8Theta','af7Beta','af8Beta',
-       'af7Gamma','af8Gamma','smrPower','smrScore','faa','betaSupp',
-       'frontalGamma','thetaScore','nfScore'].forEach(k => { hist[k] = []; });
+      HIST_KEYS.forEach(k => { hist[k] = []; });
       _resetChartData();
     });
 
@@ -1143,9 +1168,7 @@ const AT = (() => {
     sessionPaused  = false; activeProtoId  = 'at';
     hist.labels=[]; hist.delta=[]; hist.theta=[]; hist.alpha=[];
     hist.beta=[]; hist.gamma=[]; hist.atRatio=[]; hist.t0=null;
-    ['af7Alpha','af8Alpha','af7Theta','af8Theta','af7Beta','af8Beta',
-     'af7Gamma','af8Gamma','smrPower','smrScore','faa','betaSupp',
-     'frontalGamma','thetaScore','nfScore'].forEach(k => { hist[k] = []; });
+    HIST_KEYS.forEach(k => { hist[k] = []; });
   }
 
   return { mount, unmount };

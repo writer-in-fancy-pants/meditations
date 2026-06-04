@@ -31,7 +31,7 @@ from collections import deque
 from typing import Any
 
 import numpy as np
-import pandas as pd
+import nolds
 
 try:
     from mne_lsl.lsl import StreamInlet, resolve_streams
@@ -67,6 +67,9 @@ from record import FrameRecorder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bridge")
+
+import warnings
+warnings.filterwarnings("ignore")
 
 # ── EEG config ────────────────────────────────────────────────────────────────
 EEG_FS         = 256
@@ -230,138 +233,154 @@ def compute_bands(signal, fs=EEG_FS):
     if psd is None:
         return {b: 0.0 for b in BANDS}
     return {b: band_power(psd, freqs, lo, hi) for b, (lo, hi) in BANDS.items()}
+ 
+# Non-linear features
+def embed_phase_space(signal: np.ndarray, m: int = 3, tau: int = 3) -> np.ndarray:
+    """Create delay-coordinate embedding.
+    Returns an (N, m) array where N = len(signal) - (m-1)*tau.
+    """
+    signal = np.asarray(signal, dtype=np.float64)
+    window = (m - 1) * tau
+    N = len(signal) - window
+    if N <= 0:
+        return np.empty((0, m))
+    return np.array([signal[i:i + window + 1:tau] for i in range(N)])
 
-def calculate_channel_to_channel_correlations(data, window_size_s=1.0, step_size_s=0.5):
-    """
-    Calculates the mean pairwise correlation between channels for each frequency band
-    across sliding windows.
-    
-    Parameters:
-    -----------
-    data : np.ndarray
-        Shape (n_channels, n_samples, n_bands).
-    window_size_s : float
-        Window size in seconds.
-    step_size_s : float
-        Step size in seconds.
-        
-    Returns:
-    --------
-    pd.DataFrame
-        Columns: ['Band', 'Channel1', 'Channel2', 'Mean_Correlation']
-    """
-    window_samples = int(window_size_s * EEG_FS) # WIN_SAMPLES
-    step_samples = int(step_size_s * EEG_FS) # STEP_SAMPLES
-    
-    results = []
-    
-    # Iterate over each band
-    for band_name in (BANDS):
-        # Data slice for this band: (n_channels, n_samples)
-        # Transpose for np.corrcoef which expects (n_vars, n_observations)
-        band_data = data
-        
-        # Generator for window indices
-        window_indices = range(0, band_data.shape[1] - window_samples + 1, step_samples)
-        
-        # Accumulator for correlation matrices
-        corr_sum = np.zeros((len(EEG_CHANNELS), len(EEG_CHANNELS)))
-        n_windows = 0
-        
-        for start_idx in window_indices:
-            end_idx = start_idx + window_samples
-            window_slice = band_data[:, start_idx:end_idx]
-            
-            # Compute correlation matrix for the window
-            corr_mat = np.corrcoef(window_slice)
-            corr_sum += corr_mat
-            n_windows += 1
-            
-        # Average correlation
-        if n_windows > 0:
-            mean_corr_mat = corr_sum / n_windows
-            
-            # Extract pairwise correlations
-            for i, ch1 in enumerate(EEG_CHANNELS):
-                for j, ch2 in enumerate(EEG_CHANNELS):
-                    if i < j:
-                        results.append({
-                            'Band': band_name,
-                            'Channel1': ch1,
-                            'Channel2': ch2,
-                            'Mean_Correlation': mean_corr_mat[i, j]
-                        })
-                        
-    return pd.DataFrame(results)
 
-def calculate_band_to_band_correlations(data, window_size_s=1.0, step_size_s=0.5):
-    """
-    Calculates the mean pairwise correlation between frequency bands for each channel
-    across sliding windows.
-    
-    Parameters:
-    -----------
-    data : np.ndarray
-        Shape (n_channels, n_samples, n_bands).
-    fs : float
-        Sampling frequency.
-    window_size_s : float
-        Window size in seconds.
-    step_size_s : float
-        Step size in seconds.
-        
-    Returns:
-    --------
-    pd.DataFrame
-        Columns: ['Channel', 'Band1', 'Band2', 'Mean_Correlation']
-    """
-    window_samples = int(window_size_s * EEG_FS)
-    step_samples = int(step_size_s * EEG_FS)
-    
-    results = []
-    
-    # Iterate over each channel
-    for ch_name in data.keys():
-        # Data slice for this channel: dict of channels->dict of bands
-        # Already in correct shape for np.corrcoef: (n_vars, n_observations) -> (bands, time)
-        # So we need data[ch, :, :] which is (time, bands), then transpose to (bands, time)
-        channel_data = data[ch_name]
-        
-        window_indices = range(0, channel_data.shape[1] - window_samples + 1, step_samples)
-        
-        corr_sum = np.zeros((len(BANDS), len(BANDS)))
-        n_windows = 0
-        
-        for start_idx in window_indices:
-            end_idx = start_idx + window_samples
-            window_slice = channel_data[:, start_idx:end_idx]
-            
-            corr_mat = np.corrcoef(window_slice)
-            corr_sum += corr_mat
-            n_windows += 1
-            
-        if n_windows > 0:
-            mean_corr_mat = corr_sum / n_windows
-            
-            for i, b1 in enumerate(BANDS):
-                for j, b2 in enumerate(BANDS):
-                    if i < j:
-                        results.append({
-                            'Channel': ch_name,
-                            'Band1': b1,
-                            'Band2': b2,
-                            'Mean_Correlation': mean_corr_mat[i, j]
-                        })
-                        
-    return pd.DataFrame(results)
+def euclid_dist(a: np.ndarray, b: np.ndarray) -> float:
+    """Euclidean distance between two same-length arrays : redundant"""
+    return float(np.linalg.norm(a - b))
+    #return float(np.sqrt(np.sum((a - b) ** 2))) 
 
+def lle(
+    signal: np.ndarray,
+    m: int = 3,
+    tau: int = 3,
+    theiler_w: int = 20,
+    evolve_steps: int = 20,
+):
+    pts = embed_phase_space(signal, m, tau)
+    n_pts = len(pts)
+    if n_pts < evolve_steps + 2:
+        return 0.0
+    
+    # Accumulate mean-log divergence
+    indices = np.arange(0, n_pts)
+    div_sum = np.zeros(evolve_steps, dtype=np.float64)
+    div_count = np.zeros(evolve_steps, dtype=np.float64)
+    valid = []
+    
+    for qi in indices:
+        # Nearest neighbor outside Theiler window
+        nni = -1
+        nnval = -1
+        
+        for ri in range(n_pts):
+            if abs(ri - qi) <= theiler_w:
+                continue
+            d = euclid_dist(pts[ri], pts[qi])
+            if 0 < d < nnval:
+                nnval = d
+                nni = ri
+        
+        if nni < 0 or nnval == 0:
+            continue
+        
+        # Divergence over evolve_steps
+        for k in range(0, evolve_steps):
+            qi2 = qi+k+1
+            ri2 = nni+k+1
+            
+            if qi2 >= n_pts or ri2 >= n_pts:
+                continue
+            
+            dk = euclid_dist(pts[ri2], pts[qi2])
+            if dk>0:
+                div_sum[k] += np.log(dk / nnval)
+                div_count[k] += 1
+            
+    xs = []
+    ys = []
+    for k in range(evolve_steps):
+        if div_count[k]>0:
+            xs.append(k+1)
+            ys.append(div_sum/div_count)
+    
+    n = len(xs)
+    if n < 3:
+        return 0.0
+    
+    xs = np.array(xs)
+    ys = np.array(ys)
+    
+    sum_x = xs.sum()
+    sum_y = ys.sum()
+    sum_xy = (xs*ys).sum()
+    
+    denom = n*np.linalg.norm(xs) - sum_x**2
+    if denom == 0:
+        return 0
+    
+    return float((n*sum_xy - sum_x*sum_y) / denom)
+
+
+def lle_multi(bands:dict, 
+        m: int = 10,
+        tau: int = 3,
+        theiler_w: int = 20,
+        evolve_steps: int = 20
+        ):
+    """Per-channel LLE"""
+    res = {}
+    for ch in bands:
+        eeg = np.asarray(bands[ch], dtype=np.float64)
+
+        res[ch] = nolds.lyap_r(eeg, emb_dim=m, lag=None, min_tsep=None,
+                       tau=tau, min_neighbors=theiler_w,
+                       trajectory_len=evolve_steps, fit='RANSAC')
+        #res[ch] = lle(eeg, m, tau, theiler_w, evolve_steps) 
+    return res   
+
+def katz(bands:dict):
+    """Per-channel Katz"""
+    res = {}
+    for ch in bands:
+        eeg = np.asarray(bands[ch], dtype=np.float64)
+        sl = eeg.shape[0]
+        nbr = np.linalg.norm(np.diff(eeg)).sum()
+        sa = nbr.mean()
+        l = nbr.sum()
+        a = np.linalg.norm(eeg - eeg[0]).max()
+        s = sl/sa
+        res[ch] = np.log(s) / (np.log(s) + np.log(a/l))
+        print(f"Katz {ch}, {res[ch]}")
+    return res 
+
+def higuchi(bands:dict, k = 8):
+    """Per-channel Katz"""
+    res = {}
+    for ch in bands:
+        eeg = np.asarray(bands[ch], dtype=np.float64)
+        n = eeg.shape[0]
+        l = np.zeros(k)
+        for j in range(k):
+            #for i in range(np.floor(n-j)/k)):
+            r1 = np.arange(j+k, n, k)
+            r2= np.arange(j, n-k, k)
+            l[j] = np.linalg.norm((eeg[r1] - eeg[r2]), 1)*(n-1)/((n-j)*(k**2))
+        res[ch] = np.log(l.sum())/ np.log(1/k)
+        print(f"Higuchi {ch}, {res[ch]}")
+    return res 
+   
 def compute_eeg_frame():
     if len(eeg_buffers[0]) < WIN_SAMPLES:
         return None
 
     bp  = {}
+    raw = {}
     for i, ch in enumerate(EEG_CHANNELS):
         bp[ch.lower()] = compute_bands(list(eeg_buffers[i]))
+        raw[ch.lower()] = list(eeg_buffers[i])
 
     tp9, af7, af8, tp10 = bp["tp9"], bp["af7"], bp["af8"], bp["tp10"]
     eps = 1e-12
@@ -410,8 +429,21 @@ def compute_eeg_frame():
         # # correlation metrics
         # "band_correlations" :   calculate_band_to_band_correlations(bp),
         # "channel_correlations": calculate_channel_to_channel_correlations(bp),
+        
+        # Non-linear
+        # Largest Lyapunov Exp', desc: 'Mean LLE across all 4 channels — positive = chaotic dynamics, near-zero = ordered/periodic brain state'
+        "lle": lle_multi(raw),
+        # Katz dimension 
+        'katz': katz(raw),
+        # higuchi dimension
+        'higuchi' : higuchi(raw)
+        
+        # Correlation dimension : Mean fractal dimension D₂ (Grassberger–Procaccia) — reflects complexity / degrees of freedom in the EEG attractor
+       #"corr_dim" : 0,
+        # Chaos index : Composite nonlinear score: normalised LLE × D₂ × spectral entropy — near-perfect state classifier
+        #"chaos_index" : 0
     }
-
+         
     return {"type": "eeg", "bands": bp, "metrics": metrics, "ts": 0}
 
 # ── DSP — PPG / HRV ──────────────────────────────────────────────────────────
