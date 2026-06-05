@@ -53,7 +53,7 @@ const AT = (() => {
     'af7Alpha','af8Alpha','af7Theta','af8Theta','af7Beta','af8Beta',
        'af7Gamma','af8Gamma','smrPower','smrScore','faa','betaSupp',
        'frontalGamma','thetaScore','nfScore',
-      'lle_tp9',  'lle_af7', 'lle_af8','lle_tp10'
+      'lle_tp9',  'lle_af7', 'lle_af8','lle_tp10', 'katz','higuchi'
       ];
   /* ── Neurofeedback protocol definitions ─────────────────────────── */
   //
@@ -301,8 +301,33 @@ const AT = (() => {
       ],
       threshAxis: 'y2', yLabel: '', y2Label: 'LLE',
       threshMin: -0.2, threshMax: 3.0, threshStep: 0.05, threshDefault: 0.0,
-      snapshotKey: 'alpha_theta_ratio',
-      baselineMetric: (metrics) => metrics.at_ratio ?? 1.0,
+      snapshotKey: 'lle',
+      baselineMetric: (metrics) => metrics.katz.mean() ?? 1.0,
+      direction: 'up',
+      badgeFn: (hist) => {
+        const t = hist.theta.slice(-1)[0]; const a = hist.alpha.slice(-1)[0];
+        return t != null && a != null && t > a;
+      },
+      badgeLabel: 'θ > α'
+    },
+    {
+      id : "Fractal Dimension",
+      label: "Fractal Dimension",
+      // Is it possible to not change instructions?
+      threshAxis: 'y2', yLabel: 'Power (µV²/Hz)', y2Label: 'lle',
+      snapshotKey: 'lle',
+      direction: 'up',
+      //continue: true,
+      task: "LLE.",
+      goal: 'LLE',
+      datasets: [
+        { label: 'katz',   color: '#def10c', histKey: 'katz',   axis: 'y'  },
+        { label: 'higuchi', color: '#f14313', histKey: 'higuchi', axis: 'y' },
+      ],
+      threshAxis: 'y2', yLabel: '', y2Label: 'LLE',
+      threshMin: -0.2, threshMax: 3.0, threshStep: 0.05, threshDefault: 0.0,
+      snapshotKey: 'higuchi',
+      baselineMetric: (metrics) => metrics.higuchi.mean() ?? 1.0,
       direction: 'up',
       badgeFn: (hist) => {
         const t = hist.theta.slice(-1)[0]; const a = hist.alpha.slice(-1)[0];
@@ -362,7 +387,9 @@ const AT = (() => {
     lle_tp9: [],
     lle_af7: [],
     lle_af8: [],
-    lle_tp10:[]
+    lle_tp10:[],
+    katz:    [],
+    higuchi: []
   };
 
   let scaleFactors = {'delta':1.0, 'theta':1.0, 'alpha':1.0, 'gamma':1.0, 'beta':1.0}
@@ -724,6 +751,14 @@ const AT = (() => {
   }
 
   /* ── Frame processing ───────────────────────────────────────────── */
+  function avgKeys(obj, keys) {
+    const values = keys
+      .map(k => obj[k])
+      .filter(v => v !== undefined && v !== null);
+    return values.length > 0
+      ? values.reduce((sum, v) => sum + v, 0) / values.length
+      : 0;
+  }
 
   function _onFrame(frame) {
     if (!_mounted || frame.type !== 'eeg') return;
@@ -735,7 +770,8 @@ const AT = (() => {
 
     // ── Raw per-channel values ────────────────────────────────────
     const ch = ch => bands[ch] ?? {};
-    const avg4 = b => (['tp9','af7','af8','tp10'].reduce((s,c)=>s+(bands[c]?.[b]??0),0)/4);
+    const use_ch = ['tp9','af7','af8','tp10']
+    const avg4 = b => (use_ch.reduce((s,c)=>s+(bands[c]?.[b]??0),0)/use_ch.length);
 
     const delta = avg4('delta'), theta = avg4('theta'),
           alpha = avg4('alpha'), beta  = avg4('beta'), gamma = avg4('gamma');
@@ -749,8 +785,6 @@ const AT = (() => {
     const af8Beta     = ch('af8').beta    ?? 0;
     const af7Gamma    = ch('af7').gamma   ?? 0;
     const af8Gamma    = ch('af8').gamma   ?? 0;
-
-
 
     // ── Local metric fallbacks (used when no snapshot present) ────
     const atRatio     = metrics.at_ratio      ?? (theta / (alpha + 1e-12));
@@ -795,6 +829,10 @@ const AT = (() => {
     ChartUtils.rollingPush(hist.lle_af7,     metrics.lle['af7'],     P);
     ChartUtils.rollingPush(hist.lle_af8,     metrics.lle['af8'],     P);
     ChartUtils.rollingPush(hist.lle_tp10,    metrics.lle['tp10'],     P);
+
+    // Fractal dimension
+    ChartUtils.rollingPush(hist.katz,     avgKeys(metrics.katz, use_ch),    P);
+    ChartUtils.rollingPush(hist.higuchi,  avgKeys(metrics.higuchi, use_ch), P);
 
     // ── Parse snapshot (overwrites last-pushed local values) ──────
     const hasSnap = frame.snapshot ? _parseSnapshot(frame.snapshot, hist) : false;

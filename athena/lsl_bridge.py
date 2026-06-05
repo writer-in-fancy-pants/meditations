@@ -353,23 +353,29 @@ def katz(bands:dict):
         a = np.linalg.norm(eeg - eeg[0]).max()
         s = sl/sa
         res[ch] = np.log(s) / (np.log(s) + np.log(a/l))
-        print(f"Katz {ch}, {res[ch]}")
+    print(f"Katz, {res['af7']}")
     return res 
 
-def higuchi(bands:dict, k = 8):
+def higuchi(bands:dict, k_max = 8):
     """Per-channel Katz"""
     res = {}
     for ch in bands:
         eeg = np.asarray(bands[ch], dtype=np.float64)
         n = eeg.shape[0]
-        l = np.zeros(k)
-        for j in range(k):
-            #for i in range(np.floor(n-j)/k)):
-            r1 = np.arange(j+k, n, k)
-            r2= np.arange(j, n-k, k)
-            l[j] = np.linalg.norm((eeg[r1] - eeg[r2]), 1)*(n-1)/((n-j)*(k**2))
-        res[ch] = np.log(l.sum())/ np.log(1/k)
-        print(f"Higuchi {ch}, {res[ch]}")
+        
+        x = np.zeros(k_max)
+        y = np.zeros(k_max)
+        for k in range(2, k_max):
+            l = np.zeros(k)
+            for j in range(k):
+                #for i in range(np.floor(n-j)/k)):
+                r1 = np.arange(j+k, n, k)
+                r2= np.arange(j, n-k, k)
+                l[j] = np.linalg.norm((eeg[r1] - eeg[r2]), 1)*(n-1)/((n-j)*(k))
+            x[k] = np.log(1/k)
+            y[k] = np.log(l.mean())
+        res[ch] = np.polyfit(x[2:], y[2:], 1)[0]
+    print(f"Higuchi, {res['af7']}")
     return res 
    
 def compute_eeg_frame():
