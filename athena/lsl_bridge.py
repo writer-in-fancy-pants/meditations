@@ -31,6 +31,7 @@ from collections import deque
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import nolds
 
 try:
@@ -92,7 +93,7 @@ BANDS = {
 
 # ── Optics / PPG / fNIRS config ───────────────────────────────────────────────
 OPTICS_FS          = 64
-PPG_WIN_SEC        = 30
+PPG_WIN_SEC        = 40
 PPG_STEP_SEC       = 2
 PPG_WIN_SAMPLES    = int(OPTICS_FS * PPG_WIN_SEC)
 PPG_STEP_SAMPLES   = int(OPTICS_FS * PPG_STEP_SEC)
@@ -108,6 +109,8 @@ MIN_PEAKS_FOR_HRV  = 10
 PPG_CH_IR   = 15   # Infrared – best for heartbeat
 PPG_CH_NIR  = 14   # Near-IR  (730 nm) – fNIRS haemodynamics
 PPG_CH_RED  = 13   # Red      (660 nm) – SpO2 estimation
+PPG_CH = 2
+N_PPG_CH = -1
 FNIRS_CHANNELS = list(range(0, 13))   # channels dedicated to fNIRS tissue optics
 
 OPTICS_CHANNEL_NAMES = (
@@ -128,7 +131,7 @@ N_IMU_CH        = 6
 
 # ── Shared ring buffers ───────────────────────────────────────────────────────
 eeg_buffers     = [deque(maxlen=WIN_SAMPLES)       for _ in range(N_EEG_CH)]
-optics_buffers  = [deque(maxlen=PPG_WIN_SAMPLES)   for _ in range(16)]
+optics_buffers  = None
 imu_buffers     = [deque(maxlen=IMU_WIN_SAMPLES)   for _ in range(N_IMU_CH)]
 
 latest_eeg_frame    = None
@@ -353,7 +356,7 @@ def katz(bands:dict):
         a = np.linalg.norm(eeg - eeg[0]).max()
         s = sl/sa
         res[ch] = np.log(s) / (np.log(s) + np.log(a/l))
-    print(f"Katz, {res['af7']}")
+    #print(f"Katz, {res['af7']}")
     return res 
 
 def higuchi(bands:dict, k_max = 8):
@@ -368,14 +371,13 @@ def higuchi(bands:dict, k_max = 8):
         for k in range(2, k_max):
             l = np.zeros(k)
             for j in range(k):
-                #for i in range(np.floor(n-j)/k)):
                 r1 = np.arange(j+k, n, k)
                 r2= np.arange(j, n-k, k)
                 l[j] = np.linalg.norm((eeg[r1] - eeg[r2]), 1)*(n-1)/((n-j)*(k))
             x[k] = np.log(1/k)
-            y[k] = np.log(l.mean())
+            y[k] = np.log(l.sum())
         res[ch] = np.polyfit(x[2:], y[2:], 1)[0]
-    print(f"Higuchi, {res['af7']}")
+    #print(f"Higuchi, {res['af7']}")
     return res 
    
 def compute_eeg_frame():
@@ -454,6 +456,38 @@ def compute_eeg_frame():
 
 # ── DSP — PPG / HRV ──────────────────────────────────────────────────────────
 
+def get_heart_rate(signal):
+    fft_values = np.fft.fft(signal)
+    frequencies = np.fft.fftfreq(len(signal), d=(1.0/OPTICS_FS))
+    
+    positive_mask = (frequencies > 0.4) and (frequencies<3)
+    freqs = frequencies[positive_mask]
+    amplitudes = np.abs(fft_values)[positive_mask]
+    
+    max_idx = np.argmax(amplitudes)
+    dominant_freq = freqs[max_idx]
+    dominant_period = 1 / dominant_freq
+
+    log.info(f"Max Amplitude Frequency: {dominant_freq:.4f}")
+    log.info(f"Dominant Period (cycles): {dominant_period:.2f}")
+    return dominant_period
+
+def calculate_hr():
+    cols = [f'opt{i}' for i in range(len(optics_buffers)-1)]
+    ppg_df = pd.concat([pd.Series(x) for x in optics_buffers], axis=1)
+    ppg_df.columns=(cols+['timestamp'])
+    log.info(len(ppg_df))
+    #ppg_df['time_diff'] = ppg_df['timestamp'].diff()
+    #ppg_df['timestamp'] = pd.to_datetime(ppg_df['timestamp'])
+    #ppg_df.set_index('timestamp', inplace=True)
+    
+    hrs = []
+    for col in cols:
+        signal = ppg_df[col]#.interpolate(method='time')
+        hrs.append(get_heart_rate(signal.values))
+    return np.mean(hrs)
+    
+
 def process_ppg_for_hrv() -> dict[str, Any] | None:
     """
     Run NeuroKit2 PPG pipeline on the IR channel ring buffer.
@@ -462,7 +496,7 @@ def process_ppg_for_hrv() -> dict[str, Any] | None:
     if not NK2_AVAILABLE:
         return None
 
-    signal = np.asarray(optics_buffers[PPG_CH_RED], dtype=float)
+    signal = np.asarray(optics_buffers[PPG_CH], dtype=float)
     ts = np.asarray(optics_buffers[-1], dtype=float)
     if len(signal) < OPTICS_FS * 10:
         return None
@@ -471,6 +505,7 @@ def process_ppg_for_hrv() -> dict[str, Any] | None:
         signals_df, info = nk.ppg_process(signal, sampling_rate=OPTICS_FS)
         peak_indices = info["PPG_Peaks"]
         if len(peak_indices) < MIN_PEAKS_FOR_HRV:
+            log.info(f"Not enough peaks {len(peak_indices)}")
             return None
 
         rr_ms     = (np.diff(peak_indices) / OPTICS_FS * 1000).tolist()
@@ -482,10 +517,10 @@ def process_ppg_for_hrv() -> dict[str, Any] | None:
                 hrv_freq = nk.hrv_frequency(signals_df, sampling_rate=OPTICS_FS, show=False)
                 lf_power = float(hrv_freq.get("HRV_LF",   [float("nan")]).iloc[0])
                 hf_power = float(hrv_freq.get("HRV_HF",   [float("nan")]).iloc[0])
-                #lf_hf    = float(hrv_freq.get("HRV_LFHF", [float("nan")]).iloc[0])
+                lf_hf    = float(hrv_freq.get("HRV_LFHF", [float("nan")]).iloc[0])
             except Exception as e:
                 log.warning("Freq-domain HRV failed: %s", e)
-
+                
         metrics = {
             "timestamp":    time.time(),
             "rr_ms":        _safe_float(hrv_time.get("HRV_MeanNN", [float("nan")]).iloc[0]),
@@ -495,14 +530,15 @@ def process_ppg_for_hrv() -> dict[str, Any] | None:
             "mean_hr_bpm":  _safe_float(signals_df.get("PPG_Rate",  [float("nan")]).iloc[-1]),
             "lf_power":     _safe_float(lf_power),
             "hf_power":     _safe_float(hf_power),
-            #"lf_hf_ratio":  _safe_float(lf_hf),
+            "lf_hf_ratio":  _safe_float(lf_hf),
             "rr_intervals_ms": rr_ms,
             "peak_count":   len(peak_indices),
         }
-        log.info("HRV | HR=%.1f bpm  RMSSD=%.1f ms  SDNN=%.1f ms",
+        log.info("HRV | HR=%.1f bpm  RMSSD=%.1f ms  SDNN=%.1f ms RR=%.1f ms",
                  metrics["mean_hr_bpm"] or 0,
                  metrics["rmssd_ms"]    or 0,
-                 metrics["sdnn_ms"]     or 0)
+                 metrics["sdnn_ms"]     or 0,
+                 metrics["rr_ms"]     or 0)
         return metrics
 
     except Exception as e:
@@ -534,37 +570,37 @@ def compute_fnirs_frame() -> dict[str, Any] | None:
         # Short-separation channels (0-4)  → noise/scalp blood flow reference
         # Long-separation channels  (5-9)  → cortical + scalp
         # Difference (long − short)        → cortical proxy
-        short_mean = np.array([
-            np.mean(list(optics_buffers[i])[-min_len:]) for i in range(5)
-        ])
-        long_mean  = np.array([
-            np.mean(list(optics_buffers[i + 5])[-min_len:]) for i in range(5)
-        ])
-        cortical_proxy = long_mean - short_mean
+        # short_mean = np.array([
+        #     np.mean(list(optics_buffers[i])[-min_len:]) for i in range(5)
+        # ])
+        # long_mean  = np.array([
+        #     np.mean(list(optics_buffers[i + 5])[-min_len:]) for i in range(5)
+        # ])
+        # cortical_proxy = long_mean - short_mean
 
         # NIR-channel (PPG_NIR = ch 14) slow trend as oxygenation proxy
-        nir_signal = np.array(list(optics_buffers[PPG_CH_NIR])[-min_len:], dtype=float)
+        nir_signal = np.array(list(optics_buffers[PPG_CH])[-min_len:], dtype=float)
         nir_mean   = float(np.mean(nir_signal))
         nir_std    = float(np.std(nir_signal))
 
         # Frontal hemispheric asymmetry: optodes 0-2 ≈ left, 2-4 ≈ right
-        left_proxy  = float(np.mean(cortical_proxy[:2]))
-        right_proxy = float(np.mean(cortical_proxy[3:]))
-        fnirs_asymmetry = right_proxy - left_proxy
+        # left_proxy  = float(np.mean(cortical_proxy[:2]))
+        # right_proxy = float(np.mean(cortical_proxy[3:]))
+        # fnirs_asymmetry = right_proxy - left_proxy
 
         return {
             "type": "fnirs",
-            "optodes": {
-                f"optode_{i+1}": {
-                    "short_sep": _safe_float(short_mean[i]),
-                    "long_sep":  _safe_float(long_mean[i]),
-                    "cortical_proxy": _safe_float(cortical_proxy[i]),
-                }
-                for i in range(5)
-            },
+            # "optodes": {
+            #     f"optode_{i+1}": {
+            #         "short_sep": _safe_float(short_mean[i]),
+            #         "long_sep":  _safe_float(long_mean[i]),
+            #         "cortical_proxy": _safe_float(cortical_proxy[i]),
+            #     }
+            #     for i in range(5)
+            # },
             "nir_mean":        _safe_float(nir_mean),
             "nir_std":         _safe_float(nir_std),
-            "fnirs_asymmetry": _safe_float(fnirs_asymmetry),
+            # "fnirs_asymmetry": _safe_float(fnirs_asymmetry),
             "ts": time.time(),
         }
     except Exception as e:
@@ -667,20 +703,27 @@ def optics_reader(loop):
     Reads the Muse-OPTICS-named optics stream from OpenMuse.
     OpenMuse names the optics stream 'Muse_Optics'.
     """
-    global latest_ppg_frame, latest_fnirs_frame
+    global latest_ppg_frame, latest_fnirs_frame, optics_buffers
     inlet = _resolve("Muse-OPTICS", "PPG")
     if inlet is None:
         log.warning("Optics stream unavailable — PPG and fNIRS disabled.")
         return
+    info  = inlet.get_sinfo() if _MNE_LSL else inlet.info()
+    N_PPG_CH = info.n_channels if _MNE_LSL else info.channel_count()
+    optics_buffers = [deque(maxlen=PPG_WIN_SAMPLES) for _ in range(N_PPG_CH+1)]
+    
     ppg_acc = fnirs_acc = 0
     while True:
         chunk, timestamps = _pull_chunk(inlet)
         if not chunk:
             continue
-        for sample in chunk:
-            for i in range(min(16, len(sample))):
-                optics_buffers[i].append(sample[i])
-                optics_buffers.append(timestamps)
+        # log.info(f"Chunk size {len(chunk)}, {len(chunk[0])}")
+        # log.info(f"Timestamps {len(timestamps)}")
+        for i, sample in enumerate(chunk):
+            for s in sample:
+                optics_buffers[i].append(s)
+        for t in timestamps:
+            optics_buffers[-1].append(t)
             ppg_acc   += 1
             fnirs_acc += 1
             
@@ -696,8 +739,7 @@ def optics_reader(loop):
 
         if ppg_acc >= PPG_STEP_SAMPLES:
             ppg_acc = 0
-            metrics = None
-            #metrics = process_ppg_for_hrv()
+            metrics = process_ppg_for_hrv()
             if metrics:
                 frame = {"type": "ppg", "metrics": metrics, "ts": time.time()}
                 latest_ppg_frame = frame
