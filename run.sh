@@ -33,7 +33,7 @@ log() { echo "[run.sh] $*"; }
 # ============================================================================
 create_uv_env() {
     local env_dir="${1:-.venv}"
-    local python_version="${2:-}"  # optional, e.g. "3.11"
+    local python_version="3.13"  # optional, e.g. "3.11"
 
     # --- Detect platform ---
     local os_name

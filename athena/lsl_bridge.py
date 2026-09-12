@@ -947,7 +947,8 @@ if __name__ == "__main__":
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     if args.record_path != '':
-        recorder = FrameRecorder(path=args.record_path)
-        eeg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_{current_time}_eeg.csv")
-        ppg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_{current_time}_ppg.csv")
+        prefix = args.record_path.rsplit('.', 1)[0]
+        recorder = FrameRecorder(path=f"{prefix}_{current_time}.jsonl")
+        eeg_recorder = FrameRecorder(path=f"{prefix}_{current_time}_eeg.csv")
+        ppg_recorder = FrameRecorder(path=f"{prefix}_{current_time}_ppg.csv")
     asyncio.run(main(args.host, args.port))
