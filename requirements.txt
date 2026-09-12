@@ -1,0 +1,8 @@
+numpy
+pandas
+git+https://github.com/writer-in-fancy-pants/OpenMuse.git
+websockets
+pylsl
+neurokit2
+nolds
+vispy

@@ -2,8 +2,6 @@ from pathlib import Path
 import argparse
 import pandas as pd
 
-
-
 def convert_to_muselsl(fname, outdir):
     # Extract EEG data from file
     df = pd.read_csv(fname)
