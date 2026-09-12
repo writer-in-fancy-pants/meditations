@@ -353,7 +353,7 @@ def katz(bands:dict):
         a = np.linalg.norm(eeg - eeg[0]).max()
         s = sl/sa
         res[ch] = np.log(s) / (np.log(s) + np.log(a/l))
-    print(f"Katz, {res['af7']}")
+    #print(f"Katz, {res['af7']}")
     return res 
 
 def higuchi(bands:dict, k_max = 8):
@@ -375,7 +375,7 @@ def higuchi(bands:dict, k_max = 8):
             x[k] = np.log(1/k)
             y[k] = np.log(l.mean())
         res[ch] = np.polyfit(x[2:], y[2:], 1)[0]
-    print(f"Higuchi, {res['af7']}")
+    #print(f"Higuchi, {res['af7']}")
     return res 
    
 def compute_eeg_frame():
@@ -900,9 +900,12 @@ if __name__ == "__main__":
     p.add_argument("--tcp-port", type=int, default=8766)
     p.add_argument("--record-path", type=str, default="", help="recording location")
     args = p.parse_args()
+
+    from datetime import datetime
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     if args.record_path != '':
         recorder = FrameRecorder(path=args.record_path)
-        eeg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_eeg.csv")
-        ppg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_ppg.csv")
+        eeg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_{current_time}_eeg.csv")
+        ppg_recorder = FrameRecorder(path=f"{args.record_path.rsplit('.',1)[0]}_{current_time}_ppg.csv")
     asyncio.run(main(args.host, args.port))

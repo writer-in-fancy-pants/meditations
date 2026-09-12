@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EEG Session Comparator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+        </span>
+        <span class="topbar-title">EEG Session Comparator</span>
+        <span class="topbar-sub">muselsl · TP9 · AF7 · AF8 · TP10</span>
+      </div>
+      <div class="topbar-right">
+        <button class="theme-toggle" id="themeToggle" title="Toggle light / dark mode" aria-label="Toggle theme">
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <span class="theme-label" id="themeLabel">Light mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-content">
+
+      <!-- Drop zone -->
+      <div class="drop-zone" id="dropZone">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+        <h3>Drop muselsl EEG CSV files here</h3>
+        <p>or click to browse — expects columns: timestamps, TP9, AF7, AF8, TP10</p>
+        <input type="file" id="fileInput" accept=".csv" multiple />
+      </div>
+
+      <!-- Progress -->
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <p class="progress-msg" id="progressMsg">Processing…</p>
+      </div>
+
+      <!-- Session pills -->
+      <div class="pills" id="pills"></div>
+
+      <!-- Controls (hidden until sessions loaded) -->
+      <section class="controls-section" id="controlsSection">
+
+        <div class="controls-card">
+
+          <div class="ctrl-group">
+            <div class="ctrl-label">Neurofeedback metrics</div>
+            <div class="check-row">
+              <label class="chk"><input type="checkbox" value="focus" checked /> Focus <span class="chk-sub">(frontal β/α)</span></label>
+              <label class="chk"><input type="checkbox" value="relaxation" checked /> Relaxation <span class="chk-sub">(temporal α)</span></label>
+              <label class="chk"><input type="checkbox" value="meditation" /> Meditation <span class="chk-sub">(θ/α)</span></label>
+              <label class="chk"><input type="checkbox" value="stress" /> Stress <span class="chk-sub">(frontal β+γ)</span></label>
+              <label class="chk"><input type="checkbox" value="asymmetry" /> Frontal α asymmetry</label>
+              <label class="chk"><input type="checkbox" value="engagement" /> Engagement index</label>
+              <label class="chk"><input type="checkbox" value="psd_slice" /> PSD slice <span class="chk-sub">(single bin)</span></label>
+            </div>
+          </div>
+
+          <div class="ctrl-divider"></div>
+
+          <div class="ctrl-group">
+            <div class="ctrl-label">Band powers</div>
+            <div class="check-row">
+              <label class="chk"><input type="checkbox" value="delta" /> δ Delta</label>
+              <label class="chk"><input type="checkbox" value="theta" /> θ Theta</label>
+              <label class="chk"><input type="checkbox" value="alpha" /> α Alpha</label>
+              <label class="chk"><input type="checkbox" value="beta" />  β Beta</label>
+              <label class="chk"><input type="checkbox" value="gamma" /> γ Gamma</label>
+            </div>
+          </div>
+
+          <div class="ctrl-divider"></div>
+
+          <div class="ctrl-group">
+            <div class="ctrl-label">Time axis</div>
+            <div class="toggle-row">
+              <button class="tgl" id="tglPct" data-mode="pct">% Progress</button>
+              <button class="tgl active" id="tglMin" data-mode="min">Minutes</button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Summary cards -->
+        <div class="summary-grid" id="summaryGrid"></div>
+
+      </section>
+
+      <!-- Charts -->
+      <div class="chart-stack" id="chartStack">
+        <div class="empty-state">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+          </svg>
+          <p>Upload muselsl CSV files to begin comparing sessions</p>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
