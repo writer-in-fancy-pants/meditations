@@ -9,13 +9,15 @@
 # Usage: ./run.sh
 set -euo pipefail
 
+RECORD_PREFIX="$1"
+
 # ============================================================================
 # Config — ports and paths
 # ============================================================================
 FRONTEND_PORT="${FRONTEND_PORT:-9001}"
 WS_PORT="${WS_PORT:-8765}"
 
-RECORD_PATH="${RECORD_PATH:-$(pwd)/data/}"
+RECORD_PATH="${RECORD_PATH:-$(pwd)/data/${RECORD_PREFIX}}"
 PRESET="${PRESET:-p1045}"
 STREAM_WAIT_TIMEOUT="${STREAM_WAIT_TIMEOUT:-60}"   # seconds
 
@@ -146,7 +148,7 @@ ensure_python_env() {
 ensure_python_env
 PYTHON_BIN="$VENV_DIR/bin/python"
 
-mkdir -p "$RECORD_PATH"
+mkdir -p "$(dirname "$RECORD_PATH")"
 
 # ============================================================================
 # Cleanup on exit
