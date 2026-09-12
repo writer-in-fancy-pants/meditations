@@ -24,7 +24,7 @@ const HRV = (() => {
   /* ── Constants ──────────────────────────────────────────────────── */
   const PPG_FS          = 64;          // Muse S Athena PPG sample rate (Hz)
   // const RR_WINDOW       = 30;          // beats for rolling RMSSD
-  const BASELINE_BEATS  = 120;         // ~2 min at 60 bpm
+  const BASELINE_BEATS  = 60;         // ~2 min at update every 2 second
   const COHERENCE_WIN   = 60;          // beats for coherence DFT
   const MAX_CHART_PTS   = 300;
 
@@ -36,8 +36,7 @@ const HRV = (() => {
   let sessionActive  = false;
   let sessionPaused = false;
   let baselinePhase  = false;
-  const ppg_keys     = ['rr_ms', 'rmssd_ms']
-    //'sdnn_ms','pnn50', 'mean_hr_bpm', 'lf_power', 'hf_power', 'lf_hf_ratio', 'peak_count'];       
+  const ppg_keys     = ['rr_ms', 'rmssd_ms', 'rr_intervals_ms', 'sdnn_ms','pnn50', 'mean_hr_bpm', 'lf_power', 'hf_power', 'lf_hf_ratio', 'peak_count'];       
   let ppg_frames     = {};            // all RR intervals this session (ms)
   let lastPeakIdx    = -1;            // sample index of last detected peak
   let sampleCount    = 0;             // total samples received
@@ -80,16 +79,20 @@ const HRV = (() => {
     const metrics = frame.metrics;
     if (metrics == null) return;
 
+    // console.log(metrics)
+
     ppg_keys.forEach( key => {
       ppg_frames[key].push(metrics[key]);
     });
+
+    //console.log(ppg_frames)
 
     // Baseline collection
     if (baselinePhase) {
       const pct = Math.min(ppg_frames['rr_ms'].length / BASELINE_BEATS, 1);
       _el('statStatus').textContent = `Calibrating… ${Math.round(pct*100)}%`;
       if (ppg_frames['rr_ms'].length >= BASELINE_BEATS) _finishBaseline();
-      return;
+      //return;
     }
 
     const rv = metrics['rmssd_ms'];
@@ -100,8 +103,8 @@ const HRV = (() => {
 
     HrvLib.pushHist(hist, { label, hr: hr, rr: metrics['rr_ms']??null, rv }, MAX_CHART_PTS);
     HrvLib.updateCharts(charts, hist, baselineRMSSD);
-    HrvLib.drawGauge('muse2Gauge', ci, rv, baselineRMSSD);
-    HrvLib.updateStateBadge('muse2StateBadge', rv, baselineRMSSD);
+    HrvLib.drawGauge('Gauge', pv/100);
+    HrvLib.updateStateBadge('stateBadge', rv, baselineRMSSD);
 
     // Stats
     if (hr  !== null) _el('statHR').innerHTML  = `${hr}<span class="stat-unit">bpm</span>`;
