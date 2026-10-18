@@ -248,7 +248,7 @@ log "OpenMuse stream is live."
 # ============================================================================
 log "Starting lsl_bridge.py on localhost:${WS_PORT}, recording to ${RECORD_PATH}"
 "$PYTHON_BIN" "$BACKEND_DIR/lsl_bridge.py" \
-    --host localhost \
+    --host 0.0.0.0 \
     --port "$WS_PORT" \
     --record-path "$RECORD_PATH" &
 LSL_PID=$!
