@@ -69,6 +69,38 @@ const METRICS = {
   chaos_index: { label: 'Chaos Index (combined)', desc: 'Composite: 5-factor geometric mean of normalised LLE × D₂ × HFD × KFD × spectral entropy — near-perfect state classifier' },
 };
 
+/** Metric groupings reused by chaos-metric checkboxes and the per-file combined charts. */
+const BAND_METRIC_KEYS  = ['delta', 'theta', 'alpha', 'beta', 'gamma'];
+const NEURO_METRIC_KEYS = ['focus', 'relaxation', 'meditation', 'stress', 'asymmetry', 'engagement'];
+const CHAOS_METRIC_KEYS = ['lle', 'corr_dim', 'higuchi_fd', 'katz_fd', 'chaos_index'];
+
+/**
+ * Fixed per-metric colour — each metric always gets the same colour regardless
+ * of which session or chart group it appears in.  Used by per-file combined
+ * charts so colours never collide between band/neuro/chaos groups.
+ */
+const METRIC_COLORS = {
+  // Band powers — warm-to-cool ramp
+  delta:       '#e06060',
+  theta:       '#e08840',
+  alpha:       '#c8b030',
+  beta:        '#72b830',
+  gamma:       '#38b8a0',
+  // Neurofeedback — cool spectrum
+  focus:       '#5a9fe0',
+  relaxation:  '#7c75e0',
+  meditation:  '#b060d0',
+  stress:      '#d96090',
+  asymmetry:   '#2db891',
+  engagement:  '#40c8c0',
+  // Chaos / nonlinear
+  lle:         '#f07060',
+  corr_dim:    '#60c878',
+  higuchi_fd:  '#f0b050',
+  katz_fd:     '#80a0f0',
+  chaos_index: '#d070b0',
+};
+
 /** Session palette — each entry has hex (line), bg (pill fill), txt (pill text). */
 const PALETTE = [
   { hex: '#7c75e0', bg: '#2a2845', txt: '#b8b3f5' },
@@ -84,9 +116,22 @@ const PALETTE = [
 /* ── Application state ─────────────────────────────────────────── */
 
 let sessions  = [];
-let charts    = {};
-let timeMode  = 'min'; // 'min' | 'pct'
-let psdBinK = 10; // default bin index (~5 Hz at 512-pt FFT, 256 Hz SR → df=0.5 Hz)
+let charts    = {};       // metric → Chart instance (session-comparison view)
+let timeMode  = 'min';   // 'min' | 'pct'
+let psdBinK   = 10;      // default bin index (~5 Hz at 512-pt FFT, 256 Hz SR → df=0.5 Hz)
+
+// Bumped every time renderCharts()/renderSummary() run.  Stale async work
+// checks its captured value against the live counter before touching the DOM,
+// so a stale computation can never clobber a newer render.
+let chartGen   = 0;
+let summaryGen = 0;
+
+let metricWorker    = null;
+let workerAvailable = true;
+let workerReqId     = 0;
+const workerPending     = new Map();     // reqId  → { resolve, reject }
+const workerRegistered  = new WeakMap(); // session → registration Promise
+const metricSeriesCache = new WeakMap(); // session → Map<metric, series>
 
 /* ── Theme ─────────────────────────────────────────────────────── */
 
@@ -113,6 +158,213 @@ document.getElementById('themeToggle').addEventListener('click', () => {
   // Re-render charts so axis colours update
   renderCharts();
 });
+
+/* ── Style injection ────────────────────────────────────────────── */
+
+// Inject all dynamic CSS in one place: busy cursor, zoom toolbar, legend
+// toggle states, and per-file tab bar.
+(function injectAppStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    html.worker-busy, html.worker-busy * { cursor: progress !important; }
+
+    .chart-toolbar {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 10px;
+    }
+    .zoom-reset-btn {
+      flex: 0 0 auto; font-size: 11px; line-height: 1.4;
+      padding: 3px 10px; margin-top: 1px;
+      border-radius: 6px; border: 1px solid currentColor;
+      opacity: .55; cursor: pointer;
+      background: transparent; color: inherit; white-space: nowrap;
+    }
+    .zoom-reset-btn:hover { opacity: 1; }
+    .zoom-hint { font-size: 10px; opacity: .5; margin-top: 4px; }
+
+    .leg-item { cursor: pointer; user-select: none; transition: opacity .15s; }
+    .leg-item:hover { opacity: .75; }
+    .leg-item--hidden { opacity: .3 !important; text-decoration: line-through; }
+
+    .per-file-section { margin: 22px 0; }
+    .per-file-heading h3 { font-size: 15px; }
+    .per-file-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .per-file-tab {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 13px; border-radius: 999px; font-size: 13px; cursor: pointer;
+      border: 1px solid var(--tab-color, #888);
+      background: transparent; color: inherit; opacity: .75;
+    }
+    .per-file-tab:hover { opacity: 1; }
+    .per-file-tab.active {
+      background: var(--tab-color, #888); color: #fff;
+      opacity: 1; border-color: transparent;
+    }
+    .per-file-body { display: flex; flex-direction: column; gap: 16px; }
+  `;
+  document.head.appendChild(style);
+})();
+
+/** Show/hide the progress cursor while worker requests are in flight. */
+function setWorkerBusy(busy) {
+  document.documentElement.classList.toggle('worker-busy', busy);
+}
+
+// Register chartjs-plugin-zoom if its UMD bundle is on the page.
+// Chart.js ignores unknown plugin option blocks, so nothing breaks if the
+// script hasn't been added; zoom/pan just won't be active.
+(function registerZoomPlugin() {
+  if (typeof Chart === 'undefined') return;
+  const zp = window.ChartZoom || window.chartjsPluginZoom;
+  if (zp && typeof Chart.register === 'function') {
+    try { Chart.register(zp); } catch (_) { /* already registered */ }
+  }
+})();
+
+/**
+ * Shared zoom/pan config: mouse-wheel zoom, drag to select a region,
+ * ctrl+drag to pan.  Bounded to the chart's own data range.
+ * Requires chartjs-plugin-zoom to be loaded on the page.
+ */
+function zoomPanOptions() {
+  return {
+    limits: {
+      x: { min: 'original', max: 'original' },
+      y: { min: 'original', max: 'original' },
+    },
+    pan:  { enabled: true, mode: 'xy', modifierKey: 'ctrl' },
+    zoom: {
+      wheel: { enabled: true, speed: 0.08 },
+      pinch: { enabled: true },
+      drag: {
+        enabled: true,
+        backgroundColor: 'rgba(124, 117, 224, 0.15)',
+        borderColor:     'rgba(124, 117, 224, 0.6)',
+        borderWidth: 1,
+      },
+      mode: 'xy',
+    },
+  };
+}
+
+/* ── Metric Worker: async, off-main-thread computation ─────────────
+   computeMetric() is cheap for band-power metrics but chaos metrics
+   (lle, corr_dim, …) are O(N²) and can freeze the UI if run on the
+   main thread.  Each session's frame data is sent to a persistent
+   Worker once; subsequent metric requests are single postMessage
+   round trips.  Falls back transparently to synchronous
+   computeMetric() if the Worker can't be created.
+──────────────────────────────────────────────────────────────────── */
+
+function getMetricWorker() {
+  if (metricWorker || !workerAvailable) return metricWorker;
+  try {
+    metricWorker = new Worker('metricWorker.js');
+    metricWorker.addEventListener('message', e => {
+      const { id, ok, result, error } = e.data;
+      const pending = workerPending.get(id);
+      if (!pending) return;
+      workerPending.delete(id);
+      if (workerPending.size === 0) setWorkerBusy(false);
+      ok ? pending.resolve(result) : pending.reject(new Error(error));
+    });
+    metricWorker.addEventListener('error', err => {
+      console.error('Metric worker crashed — falling back to main-thread compute:', err.message || err);
+      workerAvailable = false;
+      for (const p of workerPending.values()) p.reject(err);
+      workerPending.clear();
+      setWorkerBusy(false);
+      metricWorker.terminate();
+      metricWorker = null;
+    });
+  } catch (err) {
+    console.error('Could not start metric worker, computing on main thread instead:', err);
+    workerAvailable = false;
+    metricWorker = null;
+  }
+  return metricWorker;
+}
+
+function postToWorker(msg) {
+  const worker = getMetricWorker();
+  if (!worker) return Promise.reject(new Error('metric worker unavailable'));
+  const id = ++workerReqId;
+  return new Promise((resolve, reject) => {
+    workerPending.set(id, { resolve, reject });
+    setWorkerBusy(true);
+    worker.postMessage({ ...msg, id });
+  });
+}
+
+/**
+ * Send a session's frame data to the worker once (memoised per session
+ * object via WeakMap so repeated renders are cheap).
+ */
+function registerSessionWithWorker(session) {
+  const existing = workerRegistered.get(session);
+  if (existing) return existing;
+  const frames = session.frames.map(fr => ({
+    bp:      fr.bp,
+    rawSegs: fr.rawSegs || null,
+    psds:    fr.psds    || null,
+    metrics: fr.metrics || null,
+  }));
+  const promise = postToWorker({ type: 'registerSession', sessionName: session.name, frames })
+    .catch(err => { workerRegistered.delete(session); throw err; });
+  workerRegistered.set(session, promise);
+  return promise;
+}
+
+/** Release a session's cached worker data (call when a session is removed). */
+function dropSessionFromWorker(session) {
+  workerRegistered.delete(session);
+  metricSeriesCache.delete(session);
+  const worker = getMetricWorker();
+  if (worker) worker.postMessage({ type: 'dropSession', sessionName: session.name });
+}
+
+/**
+ * Resolve to an array of per-frame metric values for one session.
+ * Computed in the Worker when possible; falls back to synchronous
+ * computeMetric() when the Worker is unavailable.
+ */
+async function computeMetricSeriesAsync(metric, session) {
+  const cached = metricSeriesCache.get(session);
+  if (cached && cached.has(metric)) return cached.get(metric);
+
+  let result;
+
+  // Pre-calculated / pre-computed sessions have metric values stored directly
+  // in each frame's `fr.metrics` object.  The worker has no raw-EEG segments
+  // to compute from, so it would silently return zeros even though the
+  // registration message is accepted without error.  The `catch` block is
+  // only reached on a worker *rejection*, not on a worker returning wrong
+  // data — so we must bypass the worker entirely for these sessions.
+  //
+  // `session.precomputed` is set by both processPrecomputedSession() and
+  // processPreCalculatedSession().  The second guard catches any session
+  // whose first frame already has the requested metric populated, covering
+  // edge cases where the flag might be absent.
+  const firstFrame = session.frames[0];
+  const isPreCalc  = session.precomputed ||
+                     (firstFrame?.metrics != null && metric in firstFrame.metrics);
+
+  if (isPreCalc) {
+    result = session.frames.map((fr, fi) => computeMetric(metric, fr.bp, fr, session.name, fi));
+  } else {
+    try {
+      await registerSessionWithWorker(session);
+      result = await postToWorker({ type: 'computeSeries', metric, sessionName: session.name });
+    } catch (_) {
+      result = session.frames.map((fr, fi) => computeMetric(metric, fr.bp, fr, session.name, fi));
+    }
+  }
+
+  let cache = metricSeriesCache.get(session);
+  if (!cache) { cache = new Map(); metricSeriesCache.set(session, cache); }
+  cache.set(metric, result);
+  return result;
+}
 
 /* ── DSP helpers ───────────────────────────────────────────────── */
 
@@ -583,7 +835,7 @@ function parsePrecomputedCSV(text, filename) {
   const findCol = (candidates) =>
     hdr.findIndex(h => candidates.some(c => h.includes(c)));
 
-  const idxTs = hdr.findIndex(h => h.includes('timestamp') || h === 'time');
+  const idxTs = hdr.findIndex(h => h.includes('timestamp') || h === 'time' || h === 't_sec');
 
   // ── Layout detection ────────────────────────────────────────────────────────
   // Try per-electrode layout first (requires at least one electrode-specific col)
@@ -760,6 +1012,8 @@ function parsePreCalculatedCSV(text, filename) {
   }
 
   if (rows.length < 2) return null;
+  console.log(`parsePreCalculatedCSV: parsed ${rows.length} rows from ${filename}`);
+  console.log(`parsePreCalculatedCSV: first row = ${rows[0]}`);
   const durationSec = rows[rows.length - 1].tSec - rows[0].tSec;
   return { filename, rows, durationSec };
 }
@@ -907,8 +1161,9 @@ async function handleFiles(files) {
     }
 
     const idx = sessions.findIndex(s => s.name === session.name);
-    if (idx >= 0) sessions[idx] = session;
+    if (idx >= 0) { dropSessionFromWorker(sessions[idx]); sessions[idx] = session; }
     else sessions.push(session);
+    registerSessionWithWorker(session).catch(() => {});
 
     progressFill.style.width = '100%';
     await tick(50);
@@ -959,12 +1214,14 @@ function render() {
 
   renderSummary();
   renderCharts();
+  renderPerFileView();
 }
 
 document.getElementById('pills').addEventListener('click', e => {
   const btn = e.target.closest('.pill-x');
   if (!btn) return;
-  sessions.splice(+btn.dataset.idx, 1);
+  const [removed] = sessions.splice(+btn.dataset.idx, 1);
+  if (removed) dropSessionFromWorker(removed);
   render();
 });
 
@@ -975,17 +1232,8 @@ function meanOf(arr) {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
 
-function renderSummary() {
-  let bestFocus = '—', bestFocusV = -Infinity;
-  let bestRelax = '—', bestRelaxV = -Infinity;
-
-  sessions.forEach(s => {
-    const f = meanOf(s.frames.map((fr, fi) => computeMetric('focus',      fr.bp, fr, s.name, fi)));
-    const r = meanOf(s.frames.map((fr, fi) => computeMetric('relaxation', fr.bp, fr, s.name, fi)));
-    if (f > bestFocusV) { bestFocusV = f; bestFocus = s.name.slice(0, 16); }
-    if (r > bestRelaxV) { bestRelaxV = r; bestRelax = s.name.slice(0, 16); }
-  });
-
+async function renderSummary() {
+  const myGen  = ++summaryGen;
   const avgDur = (sessions.reduce((a, s) => a + s.durationSec, 0) / sessions.length / 60).toFixed(1);
 
   const card = (lbl, val, sub) =>
@@ -994,6 +1242,34 @@ function renderSummary() {
        <div class="scard-val">${val}</div>
        <div class="scard-sub">${sub}</div>
      </div>`;
+
+  // Paint placeholders immediately while async computation runs
+  document.getElementById('summaryGrid').innerHTML =
+    card('Sessions',        sessions.length, 'loaded') +
+    card('Best focus',      '…',              'computing…') +
+    card('Best relaxation', '…',              'computing…') +
+    card('Avg duration',    avgDur + 'min',   'per session');
+
+  const perSession = await Promise.all(sessions.map(async s => {
+    const [focusSeries, relaxSeries] = await Promise.all([
+      computeMetricSeriesAsync('focus',      s),
+      computeMetricSeriesAsync('relaxation', s),
+    ]);
+    return {
+      name:  s.name,
+      focus: meanOf(Array.from(focusSeries)),
+      relax: meanOf(Array.from(relaxSeries)),
+    };
+  }));
+
+  if (myGen !== summaryGen) return; // superseded by a newer call
+
+  let bestFocus = '—', bestFocusV = -Infinity;
+  let bestRelax = '—', bestRelaxV = -Infinity;
+  perSession.forEach(({ name, focus, relax }) => {
+    if (focus > bestFocusV) { bestFocusV = focus; bestFocus = name.slice(0, 16); }
+    if (relax > bestRelaxV) { bestRelaxV = relax; bestRelax = name.slice(0, 16); }
+  });
 
   document.getElementById('summaryGrid').innerHTML =
     card('Sessions',        sessions.length, 'loaded') +
@@ -1030,8 +1306,13 @@ function buildPsdSliceCard(stack, cc, isMin, maxMin, pctLabels) {
   card.id = 'psdSliceCard';
 
   card.innerHTML = `
-    <div class="chart-title">PSD slice (bin k)</div>
-    <div class="chart-desc">Raw PSD power at a single frequency bin, compared across sessions. Drag the slider to scan frequency.</div>
+    <div class="chart-toolbar">
+      <div>
+        <div class="chart-title">PSD slice (bin k)</div>
+        <div class="chart-desc">Raw PSD power at a single frequency bin, compared across sessions. Drag the slider to scan frequency.</div>
+      </div>
+      <button class="zoom-reset-btn" data-registry="main" data-chart-key="psd_slice">Reset zoom</button>
+    </div>
     <div class="psd-controls">
       <input type="range" class="psd-slider" id="psdSlider"
              min="1" max="${maxK}" step="1" value="${psdBinK}" />
@@ -1039,7 +1320,8 @@ function buildPsdSliceCard(stack, cc, isMin, maxMin, pctLabels) {
       <span class="psd-band-badge" id="psdBandBadge">${freqToBandName(binToHz(psdBinK))}</span>
     </div>
     <div class="chart-wrap"><canvas id="${cid}"></canvas></div>
-    <div class="legend" id="psdSliceLegend"></div>`;
+    <div class="legend" id="psdSliceLegend"></div>
+    <div class="zoom-hint">Scroll to zoom · drag to select a region · ctrl+drag to pan</div>`;
 
   stack.appendChild(card);
 
@@ -1119,20 +1401,6 @@ function buildPsdSliceCard(stack, cc, isMin, maxMin, pctLabels) {
     const ctx = document.getElementById(cid);
     if (!ctx) return;
 
-    const xScale = isMin
-      ? {
-          type: 'linear', min: 0, max: maxMin,
-          ticks: { font: { size: 11 }, color: cc.tick, maxTicksLimit: 10,
-                   callback: v => v.toFixed(1) + 'm' },
-          grid:  { color: cc.grid },
-          title: { display: true, text: 'Time (minutes)', font: { size: 11 }, color: cc.title },
-        }
-      : {
-          ticks: { maxTicksLimit: 11, font: { size: 11 }, color: cc.tick },
-          grid:  { color: cc.grid },
-          title: { display: true, text: 'Session progress', font: { size: 11 }, color: cc.title },
-        };
-
     charts['psd_slice'] = new Chart(ctx, {
       type: 'line',
       data: isMin ? { datasets: getDatasets(psdBinK) } : { labels: pctLabels, datasets: getDatasets(psdBinK) },
@@ -1144,9 +1412,10 @@ function buildPsdSliceCard(stack, cc, isMin, maxMin, pctLabels) {
             mode: 'index', intersect: false,
             callbacks: { label: c => `${c.dataset.label}: ${(+c.parsed.y).toExponential(3)}` },
           },
+          zoom: zoomPanOptions(),
         },
         scales: {
-          x: xScale,
+          x: buildXScale(cc, isMin, maxMin),
           y: {
             ticks: { font: { size: 11 }, color: cc.tick, callback: v => (+v).toExponential(1) },
             grid:  { color: cc.grid },
@@ -1211,43 +1480,98 @@ function chartColors() {
   };
 }
 
-function buildDatasets(metric) {
-  const N = 120;
-  return sessions.map((s, i) => {
-    const c      = PALETTE[i % PALETTE.length];
-    const raw    = s.frames.map((fr, fi) => computeMetric(metric, fr.bp, fr, s.name, fi));
-    const smoothed = smooth(raw);
+/* ── Chart helper utilities ─────────────────────────────────────── */
 
-    if (timeMode === 'pct') {
-      const data = resampleToPct(smoothed, N).map(v => v !== null ? +v.toFixed(5) : null);
-      return {
-        label: s.name, data,
-        borderColor: c.hex, backgroundColor: c.hex + '20',
-        borderWidth: 2, pointRadius: 0, tension: 0.35,
-        fill: false, spanGaps: true,
-      };
-    } else {
-      // Minutes: {x, y} scatter data — sessions end at their own duration
-      const data = s.frames.map((fr, k) => ({
-        x: +(fr.tSec / 60).toFixed(4),
-        y: smoothed[k] !== null ? +smoothed[k].toFixed(5) : null,
-      }));
-      return {
-        label: s.name, data,
-        borderColor: c.hex, backgroundColor: c.hex + '20',
-        borderWidth: 2, pointRadius: 0, tension: 0.35,
-        fill: false, spanGaps: true, parsing: false,
-      };
-    }
-  });
+/** Lighten a hex colour by blending it toward white by `amount` (0–1). */
+function brightenHex(hex, amount = 0.3) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const shift = v => Math.min(255, Math.round(v + (255 - v) * amount));
+  return '#' + [shift(r), shift(g), shift(b)].map(v => v.toString(16).padStart(2, '0')).join('');
 }
 
+/** Build the shared x-axis scale config (reused by every chart). */
+function buildXScale(cc, isMin, maxMin) {
+  return isMin
+    ? {
+        type: 'linear', min: 0, max: maxMin,
+        ticks: { font: { size: 11 }, color: cc.tick, maxTicksLimit: 10,
+                 callback: v => v.toFixed(1) + 'm' },
+        grid:  { color: cc.grid },
+        title: { display: true, text: 'Time (minutes)', font: { size: 11 }, color: cc.title },
+      }
+    : {
+        ticks: { maxTicksLimit: 11, font: { size: 11 }, color: cc.tick },
+        grid:  { color: cc.grid },
+        title: { display: true, text: 'Session progress', font: { size: 11 }, color: cc.title },
+      };
+}
+
+/**
+ * Build one Chart.js dataset from an already-computed metric series.
+ * Shared by session-comparison charts and per-file combined charts.
+ */
+function seriesToDataset(session, label, colorHex, rawSeries, N = 120, extraProps = {}) {
+  const smoothed = smooth(Array.from(rawSeries));
+  if (timeMode === 'pct') {
+    const data = resampleToPct(smoothed, N).map(v => v !== null ? +v.toFixed(5) : null);
+    return {
+      label, data,
+      borderColor: colorHex, backgroundColor: colorHex + '20',
+      borderWidth: 2, pointRadius: 0, tension: 0.35,
+      fill: false, spanGaps: true, ...extraProps,
+    };
+  }
+  const data = session.frames.map((fr, k) => ({
+    x: +(fr.tSec / 60).toFixed(4),
+    y: smoothed[k] !== null ? +smoothed[k].toFixed(5) : null,
+  }));
+  return {
+    label, data,
+    borderColor: colorHex, backgroundColor: colorHex + '20',
+    borderWidth: 2, pointRadius: 0, tension: 0.35,
+    fill: false, spanGaps: true, parsing: false, ...extraProps,
+  };
+}
+
+/**
+ * Turn already-fetched per-session series into Chart.js datasets for a
+ * single-metric session-comparison chart.
+ *
+ * Raw (lightly smoothed, w=5) datasets are pushed first so they render
+ * underneath, then moving-average overlays (w=30, brighter shade) are
+ * appended last so they sit on top of every raw trace.
+ */
+function datasetsFromSeries(seriesPerSession) {
+  const N = sessions.length;
+
+  const raw = sessions.map((s, i) => {
+    const c = PALETTE[i % PALETTE.length];
+    return seriesToDataset(s, s.name, c.hex, seriesPerSession[i]);
+  });
+
+  const ma = sessions.map((s, i) => {
+    const c      = PALETTE[i % PALETTE.length];
+    const bright = brightenHex(c.hex, 0.35);
+    // Heavy smoothing (w=30) produces a clear trend that sits visually
+    // above the noisy raw lines because these datasets are at indices N…2N-1.
+    const maSeries = smooth(Array.from(seriesPerSession[i]), 30);
+    return seriesToDataset(s, s.name + ' (MA)', bright, maSeries,
+      120, { borderWidth: 2.5 });
+  });
+
+  return [...raw, ...ma]; // MA entries at higher array indices → rendered on top
+}
+
+/* ── Render: charts ────────────────────────────────────────────── */
+
 function renderCharts() {
-  const stack   = document.getElementById('chartStack');
-  const chosen  = [...document.querySelectorAll('#controlsSection input[type="checkbox"]:checked')]
+  const myGen  = ++chartGen;
+  const stack  = document.getElementById('chartStack');
+  const chosen = [...document.querySelectorAll('#controlsSection input[type="checkbox"]:checked')]
     .map(cb => cb.value);
 
-  // Destroy old Chart instances
   Object.values(charts).forEach(c => c.destroy());
   charts = {};
   stack.innerHTML = '';
@@ -1264,100 +1588,313 @@ function renderCharts() {
   const isMin     = timeMode === 'min';
 
   chosen.forEach(metric => {
-    const m    = METRICS[metric];
-    const cid  = 'chart_' + metric;
+    const m   = METRICS[metric];
+    const cid = 'chart_' + metric;
 
     if (metric === 'psd_slice') {
       buildPsdSliceCard(stack, cc, isMin, maxMin, pctLabels);
       return;
     }
-    const legHTML = sessions.map((s, i) => {
-      const c      = PALETTE[i % PALETTE.length];
-      const avgVal = meanOf(s.frames.map((fr, fi) => computeMetric(metric, fr.bp, fr, s.name, fi)));
-      const dur    = (s.durationSec / 60).toFixed(1);
-      return `<span class="leg-item" data-ds="${i}" title="Click to show/hide">
-                <span class="leg-dot" style="background:${c.hex}"></span>
-                ${s.name} (${dur}min) — avg ${avgVal.toFixed(3)}
-              </span>`;
-    }).join('');
 
     const card = document.createElement('div');
     card.className = 'chart-card';
     card.innerHTML = `
-      <div class="chart-title">${m.label}</div>
-      <div class="chart-desc">${m.desc}</div>
+      <div class="chart-toolbar">
+        <div>
+          <div class="chart-title">${m.label}</div>
+          <div class="chart-desc">${m.desc}</div>
+        </div>
+        <button class="zoom-reset-btn" data-registry="main" data-chart-key="${metric}">Reset zoom</button>
+      </div>
       <div class="chart-wrap"><canvas id="${cid}"></canvas></div>
-      <div class="legend">${legHTML}</div>`;
+      <div class="legend" id="legend_${metric}">
+        <span class="leg-item" style="opacity:.45">Computing…</span>
+      </div>
+      <div class="zoom-hint">Scroll to zoom · drag to select a region · ctrl+drag to pan</div>`;
     stack.appendChild(card);
 
-    const datasets = buildDatasets(metric);
+    renderMetricChart({ metric, m, cid, myGen, isMin, maxMin, pctLabels, cc });
+  });
+}
 
-    // Defer so the canvas has been painted
-    setTimeout(() => {
-      const ctx = document.getElementById(cid);
-      if (!ctx) return;
+/**
+ * Async: fetch metric series (via worker when available), then create the
+ * Chart.js instance and wire up the legend click-to-toggle handler.
+ * Each call captures `myGen`; if chartGen advances while awaiting, the stale
+ * result is silently discarded.
+ */
+async function renderMetricChart({ metric, m, cid, myGen, isMin, maxMin, pctLabels, cc }) {
+  const seriesPerSession = await Promise.all(
+    sessions.map(s => computeMetricSeriesAsync(metric, s))
+  );
 
-      const xScale = isMin
-        ? {
-            type: 'linear', min: 0, max: maxMin,
-            ticks: { font: { size: 11 }, color: cc.tick, maxTicksLimit: 10,
-                     callback: v => v.toFixed(1) + 'm' },
-            grid:  { color: cc.grid },
-            title: { display: true, text: 'Time (minutes)', font: { size: 11 }, color: cc.title },
-          }
-        : {
-            ticks: { maxTicksLimit: 11, font: { size: 11 }, color: cc.tick },
-            grid:  { color: cc.grid },
-            title: { display: true, text: 'Session progress', font: { size: 11 }, color: cc.title },
-          };
+  if (myGen !== chartGen) return; // superseded
 
-      charts[metric] = new Chart(ctx, {
-        type: 'line',
-        data: isMin ? { datasets } : { labels: pctLabels, datasets },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              mode: 'index', intersect: false,
-              callbacks: { label: c => `${c.dataset.label}: ${(+c.parsed.y).toFixed(4)}` },
-            },
-          },
-          scales: {
-            x: xScale,
-            y: {
-              ticks: { font: { size: 11 }, color: cc.tick, callback: v => (+v).toFixed(3) },
-              grid:  { color: cc.grid },
-              title: { display: true, text: m.label, font: { size: 11 }, color: cc.title },
-            },
-          },
+  const legendEl = document.getElementById(`legend_${metric}`);
+  if (legendEl) {
+    legendEl.innerHTML = sessions.map((s, i) => {
+      const c   = PALETTE[i % PALETTE.length];
+      const avg = meanOf(Array.from(seriesPerSession[i]));
+      const dur = (s.durationSec / 60).toFixed(1);
+      return `<span class="leg-item" data-ds="${i}" title="Click to show/hide">
+                <span class="leg-dot" style="background:${c.hex}"></span>
+                ${s.name} (${dur}min) — avg ${avg.toFixed(3)}
+              </span>`;
+    }).join('');
+  }
+
+  const ctx = document.getElementById(cid);
+  if (!ctx) return;
+
+  const datasets = datasetsFromSeries(seriesPerSession);
+
+  charts[metric] = new Chart(ctx, {
+    type: 'line',
+    data: isMin ? { datasets } : { labels: pctLabels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: { label: c => `${c.dataset.label}: ${(+c.parsed.y).toFixed(4)}` },
         },
+        zoom: zoomPanOptions(),
+      },
+      scales: {
+        x: buildXScale(cc, isMin, maxMin),
+        y: {
+          ticks: { font: { size: 11 }, color: cc.tick, callback: v => (+v).toFixed(3) },
+          grid:  { color: cc.grid },
+          title: { display: true, text: m.label, font: { size: 11 }, color: cc.title },
+        },
+      },
+    },
+  });
+
+  // Legend click-to-toggle: toggling a session item hides/shows both the
+  // raw dataset AND its corresponding MA overlay (index i + sessions.length).
+  if (legendEl) {
+    legendEl.addEventListener('click', e => {
+      const item = e.target.closest('[data-ds]');
+      if (!item) return;
+      const dsIdx    = +item.dataset.ds;
+      const ch       = charts[metric];
+      if (!ch) return;
+      const nSessions = sessions.length;
+      [dsIdx, dsIdx + nSessions].forEach(idx => {
+        const meta = ch.getDatasetMeta(idx);
+        if (meta) meta.hidden = !meta.hidden;
       });
+      item.classList.toggle('leg-item--hidden', !!ch.getDatasetMeta(dsIdx).hidden);
+      ch.update();
+    });
+  }
+}
 
-      // ── Legend click-to-toggle individual series ─────────────────────────
-      card.querySelector('.legend').addEventListener('click', e => {
-        const item = e.target.closest('[data-ds]');
-        if (!item) return;
-        const dsIdx  = +item.dataset.ds;
-        const chart  = charts[metric];
-        if (!chart) return;
-        const meta   = chart.getDatasetMeta(dsIdx);
-        meta.hidden  = !meta.hidden;
-        item.classList.toggle('leg-item--hidden', meta.hidden);
-        chart.update();
-      });
+/* ── Single delegated listener: zoom-reset + per-file tab clicks ── */
 
-      // Note sessions excluded from PSD slice chart
-      const excluded = sessions.filter(s => s.hasPSD === false);
-      if (excluded.length) {
-        const note = document.createElement('p');
-        note.className = 'psd-unavail-note';
-        note.innerHTML = `<span>ⓘ</span> ${excluded.map(s => s.name).join(', ')} excluded — pre-computed files have no raw PSD.`;
-      }
-    }, 0);
+document.addEventListener('click', e => {
+  const zoomBtn = e.target.closest('.zoom-reset-btn');
+  if (zoomBtn) {
+    const registry = zoomBtn.dataset.registry === 'perfile' ? perFileCharts : charts;
+    const ch       = registry[zoomBtn.dataset.chartKey];
+    if (ch) ch.resetZoom();
+    return;
+  }
 
+  const tabBtn = e.target.closest('.per-file-tab');
+  if (tabBtn) {
+    activeFileSession = sessions[+tabBtn.dataset.idx];
+    document.querySelectorAll('.per-file-tab').forEach(b => b.classList.remove('active'));
+    tabBtn.classList.add('active');
+    renderPerFileBody();
+  }
+});
+
+/* ── Per-file view ──────────────────────────────────────────────── */
+
+/**
+ * The three combined charts shown before the session-comparison stack.
+ * Each group plots multiple metrics for a single session on one canvas.
+ */
+const PER_FILE_GROUPS = [
+  {
+    key:     'bands',
+    title:   'All frequency bands',
+    desc:    'δ / θ / α / β / γ band power together — one session at a time.',
+    metrics: BAND_METRIC_KEYS,
+  },
+  {
+    key:     'chaos',
+    title:   'Chaos indices',
+    desc:    'LLE, correlation dimension, Higuchi FD, Katz FD & chaos index — one session at a time.',
+    metrics: CHAOS_METRIC_KEYS,
+  },
+  {
+    key:     'neuro',
+    title:   'Neurofeedback metrics',
+    desc:    'Focus, relaxation, meditation, stress, asymmetry & engagement — one session at a time.',
+    metrics: NEURO_METRIC_KEYS,
+  },
+];
+
+let activeFileSession = null;
+let perFileGen        = 0;
+const perFileCharts   = {}; // group.key → Chart instance
+
+function ensurePerFileSection() {
+  let section = document.getElementById('perFileSection');
+  if (section) return section;
+  section = document.createElement('div');
+  section.id        = 'perFileSection';
+  section.className = 'per-file-section';
+  section.innerHTML = `
+    <div class="per-file-heading">
+      <h3>Per-file view</h3>
+      <p class="chart-desc">All bands, chaos indices, and neurofeedback metrics for one file at a time.
+        Select a file tab to switch sessions.</p>
+    </div>
+    <div class="per-file-tabs" id="perFileTabs"></div>
+    <div class="per-file-body" id="perFileBody"></div>`;
+  // Insert just before the main chartStack
+  const stack = document.getElementById('chartStack');
+  stack.parentNode.insertBefore(section, stack);
+  return section;
+}
+
+function renderPerFileView() {
+  if (sessions.length === 0) {
+    const existing = document.getElementById('perFileSection');
+    if (existing) existing.remove();
+    Object.values(perFileCharts).forEach(c => c.destroy());
+    Object.keys(perFileCharts).forEach(k => delete perFileCharts[k]);
+    activeFileSession = null;
+    return;
+  }
+
+  ensurePerFileSection();
+
+  if (!activeFileSession || !sessions.includes(activeFileSession)) {
+    activeFileSession = sessions[0];
+  }
+
+  const tabsEl = document.getElementById('perFileTabs');
+  tabsEl.innerHTML = sessions.map((s, i) => {
+    const c      = PALETTE[i % PALETTE.length];
+    const active = s === activeFileSession ? ' active' : '';
+    return `<button class="per-file-tab${active}" data-idx="${i}"
+              style="--tab-color:${c.hex}">
+              <span class="pill-dot" style="background:${c.hex}"></span>${s.name}
+            </button>`;
+  }).join('');
+
+  renderPerFileBody();
+}
+
+async function renderPerFileBody() {
+  const myGen   = ++perFileGen;
+  const session = activeFileSession;
+  const bodyEl  = document.getElementById('perFileBody');
+  if (!session || !bodyEl) return;
+
+  // Tear down previous charts
+  Object.values(perFileCharts).forEach(c => c.destroy());
+  Object.keys(perFileCharts).forEach(k => delete perFileCharts[k]);
+
+  const cc        = chartColors();
+  const isMin     = timeMode === 'min';
+  const pctLabels = Array.from({ length: 120 }, (_, i) => Math.round(i * 100 / 119) + '%');
+  const maxMin    = Math.ceil((session.durationSec / 60) * 10) / 10;
+
+  bodyEl.innerHTML = PER_FILE_GROUPS.map(g => `
+    <div class="chart-card">
+      <div class="chart-toolbar">
+        <div>
+          <div class="chart-title">${g.title}</div>
+          <div class="chart-desc">${g.desc}</div>
+        </div>
+        <button class="zoom-reset-btn" data-registry="perfile" data-chart-key="${g.key}">Reset zoom</button>
+      </div>
+      <div class="chart-wrap"><canvas id="perfile_${g.key}"></canvas></div>
+      <div class="legend" id="perfile_legend_${g.key}">
+        <span class="leg-item" style="opacity:.45">Computing…</span>
+      </div>
+      <div class="zoom-hint">Scroll to zoom · drag to select a region · ctrl+drag to pan</div>
+    </div>`).join('');
+
+  await Promise.all(
+    PER_FILE_GROUPS.map(g => renderPerFileGroup(g, session, myGen, isMin, maxMin, pctLabels, cc))
+  );
+}
+
+async function renderPerFileGroup(group, session, myGen, isMin, maxMin, pctLabels, cc) {
+  const seriesPerMetric = await Promise.all(
+    group.metrics.map(metric => computeMetricSeriesAsync(metric, session))
+  );
+
+  if (myGen !== perFileGen || activeFileSession !== session) return;
+
+  const legendEl = document.getElementById(`perfile_legend_${group.key}`);
+  if (legendEl) {
+    legendEl.innerHTML = group.metrics.map((metric, i) => {
+      const color = METRIC_COLORS[metric] || PALETTE[i % PALETTE.length].hex;
+      const avg   = meanOf(Array.from(seriesPerMetric[i]));
+      return `<span class="leg-item" data-pfds="${i}" title="Click to show/hide">
+                <span class="leg-dot" style="background:${color}"></span>
+                ${METRICS[metric].label} — avg ${avg.toFixed(3)}
+              </span>`;
+    }).join('');
+
+    legendEl.addEventListener('click', e => {
+      const item = e.target.closest('[data-pfds]');
+      if (!item) return;
+      const dsIdx = +item.dataset.pfds;
+      const ch    = perFileCharts[group.key];
+      if (!ch) return;
+      const meta  = ch.getDatasetMeta(dsIdx);
+      meta.hidden = !meta.hidden;
+      item.classList.toggle('leg-item--hidden', meta.hidden);
+      ch.update();
+    });
+  }
+
+  const ctx = document.getElementById(`perfile_${group.key}`);
+  if (!ctx) return;
+
+  // Each metric gets its fixed colour from METRIC_COLORS so the same band
+  // (e.g. alpha) is always the same colour across all three group charts.
+  const datasets = group.metrics.map((metric, i) => {
+    const color = METRIC_COLORS[metric] || PALETTE[i % PALETTE.length].hex;
+    return seriesToDataset(session, METRICS[metric].label, color, seriesPerMetric[i]);
+  });
+
+  perFileCharts[group.key] = new Chart(ctx, {
+    type: 'line',
+    data: isMin ? { datasets } : { labels: pctLabels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: { label: c => `${c.dataset.label}: ${(+c.parsed.y).toFixed(4)}` },
+        },
+        zoom: zoomPanOptions(),
+      },
+      scales: {
+        x: buildXScale(cc, isMin, maxMin),
+        y: {
+          ticks: { font: { size: 11 }, color: cc.tick, callback: v => (+v).toFixed(3) },
+          grid:  { color: cc.grid },
+          title: { display: true, text: group.title, font: { size: 11 }, color: cc.title },
+        },
+      },
+    },
   });
 }
 
@@ -1368,7 +1905,7 @@ document.querySelectorAll('.tgl').forEach(btn => {
     document.querySelectorAll('.tgl').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     timeMode = btn.dataset.mode;
-    if (sessions.length > 0) renderCharts();
+    if (sessions.length > 0) { renderCharts(); renderPerFileBody(); }
   });
 });
 
@@ -1378,28 +1915,15 @@ document.querySelectorAll('#controlsSection input[type="checkbox"]').forEach(cb 
   cb.addEventListener('change', () => { if (sessions.length > 0) renderCharts(); });
 });
 
-/* ── Inject CSS for legend hidden state ────────────────────────── */
-
-(function injectLegendCSS() {
-  const style = document.createElement('style');
-  style.textContent = `
-    .leg-item { cursor: pointer; user-select: none; transition: opacity .15s; }
-    .leg-item:hover { opacity: .75; }
-    .leg-item--hidden { opacity: .3 !important; text-decoration: line-through; }
-  `;
-  document.head.appendChild(style);
-})();
-
 /* ── Chaos metric checkboxes (dynamically injected) ────────────── */
 
 (function injectChaosControls() {
-  const CHAOS_METRICS = [
-    { key: 'lle',         label: 'Lyapunov (LLE)' },
-    { key: 'corr_dim',    label: 'Corr. Dimension' },
-    { key: 'higuchi_fd',  label: 'Higuchi FD' },
-    { key: 'katz_fd',     label: 'Katz FD' },
-    { key: 'chaos_index', label: 'Chaos Index' },
-  ];
+  // Derive the checkbox list from CHAOS_METRIC_KEYS so there is a single
+  // source of truth for which chaos metrics exist.
+  const CHAOS_METRICS = CHAOS_METRIC_KEYS.map(key => ({
+    key,
+    label: METRICS[key]?.label ?? key,
+  }));
 
   function tryInject() {
     const section = document.getElementById('controlsSection');
