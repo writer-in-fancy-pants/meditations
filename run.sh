@@ -133,7 +133,12 @@ ensure_python_env() {
 
     if [ -f "$REQUIREMENTS_FILE" ]; then
         log "Syncing dependencies from $REQUIREMENTS_FILE..."
-        uv pip install -r "$REQUIREMENTS_FILE"
+	set -e
+	{ 
+		uv pip install -r "$REQUIREMENTS_FILE"
+	}|| {
+		echo "pip install failed. skipping." 
+	}
     else
         log "WARNING: $REQUIREMENTS_FILE not found, skipping dependency install."
     fi
